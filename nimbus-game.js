@@ -16,6 +16,7 @@ import { initGenerator } from './game/generator.js';
 import { stepSim } from './game/sim.js';
 import { meters, totalScore } from './game/scoring.js';
 import { createInput } from './game/input.js';
+import { createInputKeeper } from './game/input-keeper.js';
 import { loadStats, recordRun, saveStats } from './game/stats.js';
 import { drawBackground } from './game/render/background.js';
 import { drawWorld } from './game/render/world.js';
@@ -186,6 +187,7 @@ export function createNimbusGame(container, options = {}) {
   let raf = 0;
   let last = performance.now();
   let acc = 0;
+  const keeper = createInputKeeper();
 
   function frame(now) {
     raf = requestAnimationFrame(frame);
@@ -197,10 +199,12 @@ export function createNimbusGame(container, options = {}) {
 
     if (ui.state === 'playing') {
       acc += dt;
-      let polled = input.poll();
+      const polled = input.poll();
+      keeper.add(polled);
+      let firstStep = true;
       while (acc >= STEP) {
-        stepSim(s, polled, STEP);
-        polled = { ...polled, jumpPressed: false, dashPressed: false };
+        stepSim(s, firstStep ? keeper.first(polled) : keeper.rest(polled), STEP);
+        firstStep = false;
         acc -= STEP;
       }
       if (onStar && s.run.stars > reportedStars) {
