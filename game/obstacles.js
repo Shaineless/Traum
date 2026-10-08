@@ -330,3 +330,8 @@ export function rainAt(s, x, y) {
   }
   return Math.min(1, best);
 }
+
+// STUB (Erweiterung): wird vom Agenten für obstacles.js umgesetzt.
+// destroyHail(s, x, y, r): zerstört alle Hagelkörner (hazards kind "hail") im Radius r um (x, y), Partikel poof.
+// Gibt die Anzahl der zerstörten Körner zurück.
+export function destroyHail(s, x, y, r) { return 0; }

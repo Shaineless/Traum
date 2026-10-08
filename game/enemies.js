@@ -318,3 +318,8 @@ export function clearEnemiesNear(s, x0, x1) {
   }
   list.length = j;
 }
+
+// STUB (Erweiterung): wird vom Agenten für enemies.js umgesetzt.
+// damageEnemy(s, e, how): besiegt einen Gegner wie ein Stomp (registerKill, dead = 0.001). how: "dash" | "slam" | "shot".
+// Gibt true zurück, wenn der Gegner besiegt wurde (nicht, wenn er schon tot war).
+export function damageEnemy(s, e, how) { return false; }
