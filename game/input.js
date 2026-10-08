@@ -62,6 +62,7 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
   let dashAt = null;
   let touchSeen = false;
   let dead = false;
+  const diag = { last: '', lastAt: 0, jumpDowns: 0, jumpTaken: 0 }; // nur für die Debug Anzeige
   const bound = [];
 
   const on = (target, type, fn) => {
@@ -115,15 +116,21 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
       return;
     }
     if (NO_DEFAULT.has(code)) e.preventDefault();
-    const fresh = !e.repeat;
     if (role === 'pause' || role === 'debug' || role === 'start') {
-      if (fresh) onAction(role === 'start' ? 'press' : role);
+      if (!e.repeat) onAction(role === 'start' ? 'press' : role);
       return;
     }
+    // Echtes Halten erkennt man an repeat UND daran, dass die Taste schon als gedrückt gilt. Ging ein
+    // keyup verloren (Fokuswechsel, Tastaturtreiber), zählt der nächste Druck trotz repeat als neuer Druck.
+    const wasDown = keys.has(code);
     keys.add(code);
-    if (!fresh) return;
-    if (role === 'jump') jumpAt = now();
-    else if (role === 'dash') dashAt = now();
+    diag.last = code;
+    diag.lastAt = now();
+    if (e.repeat && wasDown) return;
+    if (role === 'jump') {
+      jumpAt = now();
+      diag.jumpDowns++;
+    } else if (role === 'dash') dashAt = now();
     onAction('press');
   }
 
@@ -218,6 +225,7 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
     poll() {
       const t = now();
       const jumpPressed = jumpAt !== null && t - jumpAt <= FLANK_MAX_AGE;
+      if (jumpPressed) diag.jumpTaken++;
       const dashPressed = dashAt !== null && t - dashAt <= FLANK_MAX_AGE;
       jumpAt = null;
       dashAt = null;
@@ -231,6 +239,8 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
     },
     // Welche Touch Flächen gerade gedrückt sind, für die Darstellung: { left, right, jump, dash }
     held: () => zonesHeld(),
+    // Für die Debug Anzeige: gedrückte Tasten, zuletzt gesehene Taste, Zähler für Sprungtasten
+    diag: () => ({ down: [...keys], last: diag.last, lastAgo: diag.lastAt ? now() - diag.lastAt : -1, jumpDowns: diag.jumpDowns, jumpTaken: diag.jumpTaken }),
     destroy() {
       dead = true;
       for (const [target, type, fn] of bound) target.removeEventListener(type, fn);

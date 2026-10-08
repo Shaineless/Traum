@@ -1,7 +1,7 @@
 // Ein Simulationsschritt. Reine Logik ohne DOM, deterministisch (Zufall nur über s.rng),
 // damit Tests und der Test Bot das Spiel ohne Browser laufen lassen können.
 
-import { H, LIMITS, STEP, W } from './constants.js';
+import { H, LIMITS, PHYS, STEP, W } from './constants.js';
 import { updatePlatforms } from './platforms.js';
 import { updatePlayer } from './player.js';
 import { playerVsEnemies, updateEnemies } from './enemies.js';
@@ -44,6 +44,8 @@ export function stepSim(s, input, dt = STEP) {
   }
 
   if (s.fx.hitstop > 0) {
+    // Ein Sprung, der genau im Hitstop gedrückt wird, bleibt im Puffer und löst danach aus
+    if (input.jumpPressed && !s.player.dead) s.player.buffer = PHYS.JUMP_BUFFER;
     s.fx.hitstop = Math.max(0, s.fx.hitstop - dt);
     updateParticles(s, dt * 0.25);
     return;

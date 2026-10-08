@@ -196,6 +196,7 @@ export function createNimbusGame(container, options = {}) {
     ui.time += dt;
     ui.fps += (1 / Math.max(dt, 0.001) - ui.fps) * 0.05;
     ui.held = input.held();
+    if (ui.debug) ui.diag = input.diag();
 
     if (ui.state === 'playing') {
       acc += dt;

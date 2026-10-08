@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nimbus Tastentest</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 24px; background: #0a061e; color: #e6e0ff; font: 16px/1.5 system-ui, sans-serif; }
+      main { max-width: 760px; margin: 0 auto; }
+      h1 { font-size: 24px; margin: 0 0 8px; }
+      p { margin: 8px 0; color: #bdb2ee; }
+      .keys { display: flex; gap: 8px; flex-wrap: wrap; min-height: 48px; margin: 16px 0; }
+      .key { padding: 10px 14px; border-radius: 10px; background: #3a2a7a; border: 1px solid #8a6fd6; font-weight: 600; }
+      .row { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0; }
+      .box { flex: 1 1 200px; padding: 12px 16px; border-radius: 12px; background: #1a1240; border: 1px solid #3a2a7a; }
+      .box b { display: block; font-size: 28px; color: #ffd966; }
+      #log { height: 240px; overflow: auto; padding: 12px; border-radius: 12px; background: #120b30; border: 1px solid #3a2a7a; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+      .ok { color: #8fe9a0; }
+      .warn { color: #ff9ad5; }
+      button { margin-top: 8px; padding: 8px 14px; border-radius: 8px; border: 1px solid #8a6fd6; background: #2a1a60; color: inherit; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Nimbus Tastentest</h1>
+      <p>Klicke auf die Seite. Halte dann <b>Pfeil rechts</b> gedrückt und tippe mehrmals die <b>Leertaste</b>. Jeder Tipp muss in der Liste unten erscheinen und den Zähler erhöhen.</p>
+      <p>Fehlen Tipps hier schon, kommen sie vom Rechner gar nicht im Browser an. Dann liegt es an der Tastatur oder am Treiber und nicht am Spiel.</p>
+      <div class="keys" id="keys" aria-live="polite"></div>
+      <div class="row">
+        <div class="box">Leertaste gedrückt<b id="space">0</b></div>
+        <div class="box">davon beim Laufen<b id="while">0</b></div>
+        <div class="box">verschluckt<b id="lost">0</b></div>
+      </div>
+      <p id="verdict"></p>
+      <div id="log" role="log"></div>
+      <button id="reset" type="button">Zurücksetzen</button>
+    </main>
+    <script>
+      const down = new Set();
+      let space = 0, whileRun = 0, lost = 0, spaceHeldWhileOthers = 0;
+      const $ = (id) => document.getElementById(id);
+      const log = (txt, cls) => {
+        const d = document.createElement('div');
+        if (cls) d.className = cls;
+        d.textContent = txt;
+        $('log').prepend(d);
+        while ($('log').childNodes.length > 80) $('log').lastChild.remove();
+      };
+      const render = () => {
+        $('keys').replaceChildren(...[...down].map((c) => Object.assign(document.createElement('span'), { className: 'key', textContent: c })));
+        $('space').textContent = space;
+        $('while').textContent = whileRun;
+        $('lost').textContent = lost;
+        $('verdict').textContent = whileRun >= 5 ? 'Tipp: Ihre Leertaste kommt auch beim Laufen an. Zählt sie hier jeden Tipp, ist die Tastatur in Ordnung.' : '';
+      };
+      window.addEventListener('keydown', (e) => {
+        if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+        const wasDown = down.has(e.code);
+        down.add(e.code);
+        if (e.code === 'Space' && !(e.repeat && wasDown)) {
+          space++;
+          const others = [...down].filter((c) => c !== 'Space');
+          if (others.length) whileRun++;
+          log(`Leertaste gedrückt${others.length ? ' mit ' + others.join(' + ') : ''}${e.repeat ? ' (repeat)' : ''}`, 'ok');
+        } else if (e.code !== 'Space') {
+          if (!e.repeat) log(`${e.code} gedrückt`);
+        }
+        render();
+      });
+      window.addEventListener('keyup', (e) => {
+        if (e.code === 'Space' && !down.has('Space')) { lost++; log('Leertaste losgelassen, aber nie als gedrückt gesehen (Druck verschluckt)', 'warn'); }
+        down.delete(e.code);
+        render();
+      });
+      window.addEventListener('blur', () => { down.clear(); render(); });
+      $('reset').addEventListener('click', () => { space = whileRun = lost = 0; $('log').replaceChildren(); render(); });
+      render();
+    </script>
+  </body>
+</html>

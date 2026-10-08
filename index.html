@@ -21,7 +21,9 @@
     <main id="game"></main>
     <script type="module">
       import { createNimbusGame } from './nimbus-game.js';
-      createNimbusGame(document.getElementById('game'));
+      // ?debug in der Adresse zeigt FPS, Hitboxen und gedrückte Tasten (F3 schaltet um)
+      const debug = new URLSearchParams(location.search).has('debug');
+      createNimbusGame(document.getElementById('game'), { debug });
     </script>
   </body>
 </html>

@@ -39,6 +39,8 @@ Danach `http://localhost:8080` öffnen.
 
 Halte die Sprungtaste länger für höhere Sprünge und lass sie früh los für kleine Hüpfer. Kurz nach dem Verlassen einer Kante kannst du noch springen, und ein zu früh gedrückter Sprung wird gemerkt.
 
+**Springt Nimbus nicht, obwohl du die Taste drückst?** Öffne `tasten.html` und halte `→` gedrückt, während du die Leertaste tippst. Zählt die Seite jeden Tipp, kommt die Taste im Browser an. Zählt sie nicht, verschluckt deine Tastatur die Kombination (günstige Tastaturen erkennen nicht jede Tastenkombination). Dann hilft zum Springen `W` oder `↑`. Mit `index.html?debug` zeigt das Spiel unten links, welche Tasten ankommen.
+
 ## So funktioniert das Spiel
 
 Du hast drei Leben. Punkte gibt es für zurückgelegte Meter, Sterne, besiegte Gegner und Traumtore.

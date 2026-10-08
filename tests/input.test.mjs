@@ -496,3 +496,46 @@ test('Pointer Capture Fehler bringt nichts zum Absturz', () => {
   assert.doesNotThrow(() => touchDown(env, 'left'));
   assert.equal(env.input.held().left, true);
 });
+
+// ---------- Robustheit gegen verlorene Tastenereignisse ----------
+
+test('ein Sprung zählt auch dann, wenn ein keyup verloren ging und der Browser repeat meldet', () => {
+  const env = setup();
+  env.doc.activeElement = env.canvas;
+  down(env, 'Space');
+  env.input.poll();
+  // keyup der Leertaste kam nie an, der nächste Druck trägt trotzdem repeat true
+  env.clock.t += 400;
+  down(env, 'Space', { repeat: true });
+  // echtes Halten (Taste war schon gedrückt, repeat true) darf dagegen nicht erneut springen
+  assert.equal(env.input.poll().jumpPressed, false);
+  up(env, 'Space');
+  env.clock.t += 400;
+  down(env, 'Space', { repeat: true });
+  assert.equal(env.input.poll().jumpPressed, true);
+});
+
+test('Laufen und Springen gleichzeitig: Leertaste während Pfeil gehalten', () => {
+  const env = setup();
+  env.doc.activeElement = env.canvas;
+  down(env, 'ArrowRight');
+  for (let i = 0; i < 5; i++) down(env, 'ArrowRight', { repeat: true });
+  down(env, 'Space');
+  const p = env.input.poll();
+  assert.equal(p.move, 1);
+  assert.equal(p.jumpPressed, true);
+  assert.equal(p.jumpHeld, true);
+});
+
+test('diag zählt Sprungtasten und zeigt gedrückte Tasten', () => {
+  const env = setup();
+  env.doc.activeElement = env.canvas;
+  down(env, 'ArrowRight');
+  down(env, 'Space');
+  env.input.poll();
+  const d = env.input.diag();
+  assert.deepEqual(d.down.sort(), ['ArrowRight', 'Space']);
+  assert.equal(d.jumpDowns, 1);
+  assert.equal(d.jumpTaken, 1);
+  assert.equal(d.last, 'Space');
+});

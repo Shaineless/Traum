@@ -735,6 +735,11 @@ function drawDebug(f) {
     `Welt ${num(s.world && s.world.index)}   Tore ${num(s.world && s.world.gatesPassed)}`,
     gen ? `Chunks ${num(gen.chunks)} abgelehnt ${num(gen.rejects)} Ersatz ${num(gen.fallbacks)}` : 'Generator aus',
   ];
+  const dg = ui.diag;
+  if (dg) {
+    lines.push(`Tasten ${dg.down.length ? dg.down.join(' ') : 'keine'}`);
+    lines.push(`Sprungtaste gedrückt ${num(dg.jumpDowns)}   im Spiel ${num(dg.jumpTaken)}`);
+  }
   const lh = 14;
   const pad = 8;
   let w = 0;

@@ -45,3 +45,21 @@ test('Dash Druck wird ebenfalls gemerkt', () => {
   k.add(p);
   assert.equal(k.first(p).dashPressed, true);
 });
+
+import { createState } from '../game/state.js';
+import { initGenerator } from '../game/generator.js';
+import { stepSim } from '../game/sim.js';
+import { PHYS, STEP } from '../game/constants.js';
+
+test('ein Sprung während des Hitstops geht nicht verloren', () => {
+  const s = createState({ seed: 3 });
+  initGenerator(s);
+  for (let i = 0; i < 40; i++) stepSim(s, frame(), STEP); // landen
+  assert.equal(s.player.onGround, true);
+  s.fx.hitstop = 0.05;
+  stepSim(s, frame({ jumpPressed: true, jumpHeld: true }), STEP);
+  assert.ok(s.player.buffer > 0, 'der Sprung bleibt im Puffer');
+  assert.ok(PHYS.JUMP_BUFFER > 0);
+  for (let i = 0; i < 6; i++) stepSim(s, frame({ jumpHeld: true }), STEP);
+  assert.ok(s.player.vy < -100 || !s.player.onGround, 'Nimbus springt nach dem Hitstop');
+});
