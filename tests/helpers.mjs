@@ -10,7 +10,7 @@ export function newGame(seed = 1) {
   return s;
 }
 
-export const input = (o = {}) => ({ move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false, ...o });
+export const input = (o = {}) => ({ move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false, ...o });
 
 // Läuft frames Schritte; inputFn(s, i) liefert die Eingabe. Bricht bei mode 'over' ab.
 export function run(s, frames, inputFn = () => input({ move: 1 })) {

@@ -204,3 +204,43 @@ Siehe Stub. localStorage Schlüssel `key + '-stats'` (JSON). Der alte Schlüssel
 ## Debug Modus
 
 `createNimbusGame(container, { debug: true })` zeigt FPS, Distanz, Schwierigkeit, aktuelle Chunk ID, aktive Gegner, aktive Plattformen, Partikelanzahl, Spielergeschwindigkeit und alle Hitboxen. `F3` schaltet um. Standard ist `false`.
+
+## Erweiterung: schwerer, mehr Aktion, mehr Fähigkeiten
+
+Alle Zahlen stehen in `game/constants.js` (`ABILITY`, `SPRING`, `ICE`, `BLINK`, `COMET`, `HAIL`, `ENEMY.HAILCLOUD`, `paceAt`, `SECTIONS`, `TIPS`), alle Datenformen in `game/entities.js`.
+
+### Schwierigkeit
+
+Die Kurve (`SECTIONS`) steigt rund 80 Prozent steiler als zuvor und reicht jetzt bis Schwierigkeit 9 bei 3200 Metern ("Albtraum"). `safeFor(diff)` in `validate.js` steigt bis 0,9, `paceAt(diff)` macht Gegner, bewegliche Plattformen und Blitzabstände schneller (bis Faktor 1,5). Vorwarnzeiten (Blitz 0,9 s, Komet 1,1 s, Hagelwolke 0,8 s, Charger 0,75 s, Jumper 0,5 s) bleiben unverändert. Jeder Chunk hat `diff` bis 9. Die Auswahl im Generator lässt Chunks bis `difficultyAt + 0,6` zu, Chunks weit unter dem Ziel verlieren Gewicht.
+
+### Fähigkeiten von Nimbus (`player.js`, `shots.js`)
+
+Eingabe pro Schritt: `{ move, jumpPressed, jumpHeld, dashPressed, slamPressed, throwPressed, downHeld }`.
+
+| Fähigkeit | Auslöser | Verhalten |
+| --- | --- | --- |
+| Wolkenstoß (Dash) | `dashPressed` | immer verfügbar. Basis: `ABILITY.DASH_BASIC` (0,16 s, Abklingzeit 1,6 s, einmal pro Luftphase, Landung setzt `dash.air` zurück). Mit `power.dashT > 0` Regenbogen Dash: `DASH_RAINBOW`, kein Luftlimit, `dash.rainbow = true`. Beides macht unverwundbar und besiegt berührte Gegner (`damageEnemy`) |
+| Gleiten | `jumpHeld` in der Luft | wenn `vy > GLIDE.MIN_VY`, nicht gestunnt und `glideT < GLIDE.MAX`: Fallgeschwindigkeit höchstens `GLIDE.FALL`, `p.glide = true`, `glideT` wächst. Landung setzt zurück. Ein neuer `jumpPressed` löst zuerst einen Doppelsprung aus, wenn er möglich ist |
+| Stampfen | `slamPressed` in der Luft | nur wenn der Boden mehr als `SLAM.MIN_HEIGHT` entfernt ist. `p.slam.active`, `vy = SLAM.SPEED`, horizontal stark gebremst. Bei der Landung: Schockwelle mit Radius `SLAM.RADIUS` besiegt alle Gegner (`damageEnemy(.., "slam")`) und zerstört Hagelkörner im Radius, kleiner Rückprall `SLAM.BOUNCE`, `shake`, `hitstop 0.06`, Partikel `slam`. Ist man schon durch einen Gegner abgeprallt, endet der Sturzflug |
+| Sternenwurf | `throwPressed` | `fireShot(s)` in `shots.js`: nur mit `ammo > 0` und `throwCd <= 0`. Wurfstern fliegt in Blickrichtung mit `SHOT.SPEED`, lebt `SHOT.LIFE` Sekunden, besiegt Gegner (`damageEnemy(.., "shot")`) und zerstört Hagelkörner. Sterne laden auf (`chargeAmmo` in `scoring.js`), Combos ab 3 geben zusätzlich einen Wurfstern |
+
+`damageEnemy(s, e, how)` ist neu in `enemies.js`: besiegt den Gegner genau wie ein Stomp (`registerKill`, Combo, `dead = 0.001`, Partikel), `how` ist `"dash"`, `"slam"` oder `"shot"`. Gegner, die schon tot sind, werden ignoriert.
+
+### Neue Plattformen und Hindernisse
+
+| Objekt | Schema | Verhalten |
+| --- | --- | --- |
+| Sprungwolke | `kind "spring"`, `launch`, `press` | Landung von oben (`resolveLanding` in `player.js`): `vy = -plat.launch`, `jumps = 1`, Stretch, Partikel `spring`, Ton `spring`, `press` springt auf 1 und klingt in 0,25 s ab. Der Spieler behält seine horizontale Geschwindigkeit |
+| Eiswolke | `kind "static"`, `slick true` | auf `slick` Plattformen gelten `ICE.ACCEL_MULT` und `ICE.DECEL_MULT` für Boden Beschleunigung und Bremsen (`p.slick = true`), sonst wie Regen aber stärker. Keine Gegner und keine Stachelwolken darauf |
+| Blinkwolke | `kind "blink"` | `platforms.js` setzt pro Schritt aus `s.t`: `ph = (s.t / period + phase) % 1`, `solid = ph < on`, `warn = solid && ph >= on - BLINK.WARN / period`, `alpha` (1 solide, flackernd bei `warn`, 0,15 aus). `isSolid` liefert `solid`. Der Spieler fällt, wenn sie unter ihm verschwindet |
+| Komet | `hazards`, `kind "comet"` | Phasen `idle`, `warn` (`COMET.WARN`, Markierung des Einschlagpunkts, `charge` 0 bis 1), `strike` (`COMET.STRIKE`, Komet fliegt aus `dir` diagonal herab, `progress` 0 bis 1, Schaden im Radius `COMET.RADIUS` um (x, y) erst in der Einschlag Phase), `cooldown`. Gleiche Bildbereichsregel wie der Blitz (frieren außerhalb ein) |
+| Hagelwolke | `enemies`, `kind "hailcloud"` | schwebt wie der Flieger, `cooldown` bis zum Schuss, dann `windup` (`ENEMY.HAILCLOUD.windup` Sekunden, `telegraph` 0..1, Zittern), dann `balls` Hagelkörner (`createHail`) als Fächer nach unten mit `ballSpeed` und Winkeln im Bereich `spread` Radiant um die Senkrechte, nie auf den Spieler gezielt. Hagel liegt in `s.hazards` mit `kind "hail"`, bewegt sich geradlinig, verschwindet unter dem Bild, nach `HAIL.LIFE` oder bei Kontakt mit Plattformen, trifft den Spieler mit `hurtPlayer(.., {kind:"hail", label:"Hagel"})`. Es werden nie mehr als `LIMITS.MAX_HAZARDS` Objekte gleichzeitig erzeugt (sonst entfällt der Schuss). Hagelwolken stehen nie im sicheren Anfangsbereich eines Chunks |
+| Doppelpunkte | Powerup `double` | `power.double` Sekunden lang zählt jeder Bonus doppelt (`addBonus` in `scoring.js` erledigt das). `collectibles.js` zählt den Timer herunter |
+
+### Töne (`audio.js`, `scoring.js`)
+
+Spiellogik ruft `sfx(s, name, vol)` aus `scoring.js` auf. Das legt `{ n, v }` in `s.sfx` ab (höchstens `LIMITS.MAX_SFX`). `nimbus-game.js` spielt nach jedem Bild alle Einträge über `audio.play` und leert die Liste. Namen: `jump doublejump land star powerup stomp hurt shieldbreak dash throw slam glide spring comet hail glow strike gate combo event break die charge ice blink`. Alle Töne entstehen mit WebAudio (Oszillatoren, Rauschen, Hüllkurven), keine Dateien. Stummschalten mit `M`, das gewählte wird im `localStorage` gemerkt. Browser starten Ton erst nach einer Benutzeraktion (`unlock`).
+
+### Bildschirmeffekte (`render/screenfx.js`)
+
+`drawScreenFx(ctx, s, ui, view)` zeichnet nach der Szene und vor dem HUD: Herzschlag Vignette bei einem Leben, Geschwindigkeitslinien im Dash, Wellenring beim Traumtor, Combo Leuchten ab x3, sanfte Farbtönung bei Dream Events, kurzer Weißblitz beim Stampfen. Alles gedämpft bei `view.reduceMotion`.

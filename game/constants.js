@@ -39,18 +39,29 @@ export const PHYS = {
   LEFT_MARGIN: 8, // Mindestabstand des Spielers zum linken Bildrand
 };
 
+// Fähigkeiten von Nimbus. Der Wolkenstoß (Dash) ist immer da, das Regenbogen Powerup macht ihn stärker.
+export const ABILITY = {
+  DASH_BASIC: { TIME: 0.16, COOLDOWN: 1.6 }, // einmal pro Luftphase, Abklingzeit am Boden und in der Luft
+  DASH_RAINBOW: { TIME: 0.22, COOLDOWN: 0.45 }, // mit dem Powerup: viel öfter, ohne Luftlimit
+  GLIDE: { FALL: 150, MAX: 1.2, MIN_VY: 60 }, // Sprungtaste halten beim Fallen: höchstens 150 px/s, bis zu 1,2 s je Luftphase
+  SLAM: { SPEED: 1250, RADIUS: 112, BOUNCE: 320, MIN_HEIGHT: 36 }, // Sturzflug nach unten mit Schockwelle bei der Landung
+  SHOT: { SPEED: 640, LIFE: 0.62, COOLDOWN: 0.35, W: 22, H: 22 }, // Sternenwurf
+  AMMO: { MAX: 3, STARS_PER: 10 }, // zehn Sterne laden einen Wurfstern, bis zu drei
+};
+
 export const MAX_LIVES = 3;
 
 export const LIMITS = {
   MAX_PARTICLES: 260,
   MAX_POPUPS: 10,
-  MAX_ENEMIES_ACTIVE: 8, // lebende Gegner im Bereich camX minus 120 bis camX plus W plus 400
-  MAX_PLATFORMS: 56,
-  MAX_HAZARDS: 14,
+  MAX_ENEMIES_ACTIVE: 9, // lebende Gegner im Bereich camX minus 120 bis camX plus W plus 400
+  MAX_PLATFORMS: 64,
+  MAX_HAZARDS: 18,
   MAX_STARS: 140,
   GEN_AHEAD: W * 2, // so weit vor der Kamera wird Welt erzeugt
   CLEAN_BEHIND: 320, // alles weiter links von camX minus diesem Wert wird gelöscht
   SAFE_START: 220, // so viele Pixel am Chunk-Anfang bleiben frei von Gegnern und Hindernissen
+  MAX_SFX: 16, // Tonereignisse, die pro Bild aufgesammelt werden
 };
 
 // Fenstergrößen, in denen Windzonen und Wetter wirken dürfen
@@ -65,11 +76,22 @@ export const ENEMY = {
   JUMPER: { w: 38, h: 32, crouchTime: 0.5, hopVy: 430, hopVx: 60, minWait: 1.6, maxWait: 2.8, speed: 30 },
   FLYER: { w: 42, h: 30, speed: 45, amp: 22, omega: 2.2 },
   CHARGER: { w: 46, h: 34, speed: 28, detectX: 260, detectY: 70, windup: 0.75, dashSpeed: 430, dashTime: 0.5, cooldown: 1.3 },
+  // Hagelwolke: schwebt, kündigt 0,8 s vorher an und verschießt dann einen Fächer aus Hagelkörnern nach unten
+  HAILCLOUD: { w: 46, h: 32, speed: 36, amp: 16, omega: 1.8, windup: 0.8, cooldown: 2.6, balls: 3, spread: 0.34, ballSpeed: 300 },
 };
+export const HAIL = { R: 9, LIFE: 3.2 };
 
 export const LIGHTNING = { GLOW: 0.55, FLICKER: 0.45, STRIKE: 0.22, COOLDOWN: 1.1, WIDTH: 56, CLOUD_Y: 52 };
 export const RAIN = { ON: 4, OFF: 3, W: 300, FADE: 0.6 };
 export const SPIKE = { w: 36, h: 28 };
+
+// Tempo Faktor für Gegner, bewegliche Plattformen und Blitzabstände. Vorwarnzeiten bleiben davon unberührt.
+export const paceAt = (diff) => Math.min(1.6, 1 + 0.06 * Math.max(0, diff - 1));
+
+export const SPRING = { SPEED: 940 }; // Sprungwolke: Startgeschwindigkeit nach oben, etwa 232 px Höhe
+export const ICE = { ACCEL_MULT: 0.3, DECEL_MULT: 0.08 }; // Eiswolke: Boden wird sehr rutschig
+export const BLINK = { PERIOD: [3.4, 4.4], ON: 0.62, WARN: 0.7 }; // Blinkwolke: Takt in Sekunden, Anteil sichtbar, Vorwarnung
+export const COMET = { WARN: 1.1, STRIKE: 0.35, COOLDOWN: 1.4, RADIUS: 40, W: 80 }; // Komet: Vorwarnung mindestens 1,1 s
 
 export const COMBO = { WINDOW: 3.5, MAX_MULT: 4, BASE: 25 };
 export const SCORE = { STAR: 10, RISK_STAR: 25, EVENT_STAR: 5, GATE: 100 };
@@ -79,6 +101,7 @@ export const POWERUPS = {
   dash: { color: '#ff9ad5', label: 'Regenbogen Dash', duration: 8 },
   magnet: { color: '#ffd966', label: 'Sternmagnet', duration: 8, radius: 170 },
   feather: { color: '#c9b6ff', label: 'Traumfeder', maxCharges: 2 },
+  double: { color: '#ffb86b', label: 'Doppelpunkte', duration: 10 },
 };
 
 export const GATE = { FIRST: 500, INTERVAL: 650, HEAL: 1 };
@@ -88,11 +111,11 @@ export const gateMeter = (n) => GATE.FIRST + (n - 1) * GATE.INTERVAL; // n zähl
 // diff [von, bis] wird innerhalb des Abschnitts linear interpoliert.
 export const SECTIONS = [
   { from: 0, to: 250, name: 'Einschlafen', diff: [1, 1], mech: ['static', 'star'] },
-  { from: 250, to: 500, name: 'Erste Gegner', diff: [1, 2], mech: ['walker', 'spike', 'powerup'] },
-  { from: 500, to: 800, name: 'Wolkenwege', diff: [2, 2.5], mech: ['moving', 'rain'] },
-  { from: 800, to: 1200, name: 'Bröckelndes Land', diff: [2.5, 3], mech: ['breakable', 'jumper', 'lightning', 'fallingstar'] },
-  { from: 1200, to: 1700, name: 'Windtal', diff: [3, 3.5], mech: ['wind', 'flyer', 'charger'] },
-  { from: 1700, to: Infinity, name: 'Traumsturm', diff: [3.5, 5], mech: ['combo'], rampTo: 3700 },
+  { from: 250, to: 500, name: 'Erste Gegner', diff: [1, 2.6], mech: ['walker', 'spike', 'powerup'] },
+  { from: 500, to: 800, name: 'Wolkenwege', diff: [2.6, 3.8], mech: ['moving', 'rain', 'spring'] },
+  { from: 800, to: 1200, name: 'Bröckelndes Land', diff: [3.8, 5], mech: ['breakable', 'jumper', 'lightning', 'fallingstar', 'ice'] },
+  { from: 1200, to: 1700, name: 'Windtal', diff: [5, 6.2], mech: ['wind', 'flyer', 'charger', 'blink', 'hailcloud'] },
+  { from: 1700, to: Infinity, name: 'Traumsturm', diff: [6.2, 9], mech: ['combo', 'comet'], rampTo: 3200 },
 ];
 
 export function sectionAt(meter) {
@@ -124,6 +147,11 @@ export const HINTS = {
   rain: 'Im Regen rutschst du etwas',
   breakable: 'Brüchige Plattformen nicht zu lange betreten',
   jumper: 'Hüpfer ziehen sich vor dem Sprung zusammen',
+  spring: 'Sprungwolken schleudern dich hoch',
+  ice: 'Auf Eiswolken rutschst du weit',
+  blink: 'Blinkwolken verschwinden im Takt',
+  comet: 'Kometen kündigen ihren Einschlag an',
+  hailcloud: 'Hagelwolken zielen nie auf dich, aber sie fächern nach unten',
   lightning: 'Blitze kündigen sich an. Geh aus der Zone',
   fallingstar: 'Fallende Sterne bringen Extrapunkte',
   wind: 'Wind schiebt dich sanft',
@@ -197,3 +225,12 @@ export const STORAGE = { KEY: 'nimbus-highscore' };
 export const Y_MIN = 215; // höchste erlaubte Plattform Oberkante
 export const Y_MAX = 400; // tiefste erlaubte Plattform Oberkante
 export const KILL_Y = H + 120; // darunter ist der Spieler gefallen
+
+// Kurze Tipps zu den Fähigkeiten, einmal pro Lauf an diesen Metern als Banner (generator.js, updateHints).
+// Texte ohne Tastennamen, damit sie auch auf dem Handy passen.
+export const TIPS = [
+  { at: 70, id: 'glide', text: 'Sprungtaste in der Luft halten: Gleiten' },
+  { at: 150, id: 'dash', text: 'Wolkenstoß: Dash Taste' },
+  { at: 210, id: 'slam', text: 'In der Luft nach unten: Stampfen' },
+  { at: 330, id: 'throw', text: 'Zehn Sterne laden einen Wurfstern' },
+];

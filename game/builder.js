@@ -3,10 +3,11 @@
 // negative y liegen höher. Der Builder rechnet in Weltkoordinaten um und legt die Objekte
 // in einer Staging Struktur ab. Der Generator prüft sie und übernimmt sie erst dann in den Spielzustand.
 
-import { LIGHTNING, RAIN } from './constants.js';
+import { COMET, LIGHTNING, RAIN, paceAt } from './constants.js';
 import {
-  createBreakablePlatform, createCharger, createFlyer, createGate, createJumper, createLightning, createMovingPlatform,
-  createPowerup, createRain, createSpike, createStar, createStaticPlatform, createWalker, createWind,
+  createBlinkPlatform, createBreakablePlatform, createCharger, createComet, createFlyer, createGate, createHailcloud, createJumper,
+  createLightning, createMovingPlatform, createPowerup, createRain, createSpike, createSpringPlatform, createStar,
+  createStaticPlatform, createWalker, createWind,
 } from './entities.js';
 import { chance, int, pick, range } from './rng.js';
 
@@ -16,6 +17,7 @@ export function createBuilder(s, { ox, oy, diff, meter, mechs, measure = false, 
   const X = (x) => ox + x;
   const Y = (y) => oy + y;
   const boost = s.events.starBoost ? 1.5 : 1;
+  const pace = paceAt(diff); // Tempo Faktor dieser Schwierigkeit für Gegner, Plattformen und Blitzabstände
   const st = {
     platforms: [], enemies: [], hazards: [], zones: [], stars: [], powerups: [], gates: [], route: [],
     minY: Infinity, maxY: -Infinity, platMinY: Infinity, platMaxY: -Infinity, maxX: 0, tags: new Set(),
@@ -47,7 +49,7 @@ export function createBuilder(s, { ox, oy, diff, meter, mechs, measure = false, 
   };
 
   const b = {
-    s, diff, meter, ox, oy, st,
+    s, diff, meter, ox, oy, st, pace,
     event: s.events.active ? s.events.active.type : null,
     unlocked: (m) => mechs.has(m),
 
@@ -60,7 +62,13 @@ export function createBuilder(s, { ox, oy, diff, meter, mechs, measure = false, 
     // Plattformen
     ground: (x, y, w) => addPlat(createStaticPlatform(ctx, X(x), Y(y), w, { ground: true })),
     cloud: (x, y, w) => addPlat(createStaticPlatform(ctx, X(x), Y(y), w)),
-    moving: (x, y, w, o = {}) => addPlat(createMovingPlatform(ctx, X(x), Y(y), w, o), 'moving'),
+    moving: (x, y, w, o = {}) => addPlat(createMovingPlatform(ctx, X(x), Y(y), w, { pace, ...o }), 'moving'),
+    // Sprungwolke: dünne Plattform, die den Spieler hoch schleudert (Landeplatz, nie Einstieg oder Ausstieg)
+    spring: (x, y, w) => addPlat(createSpringPlatform(ctx, X(x), Y(y), w), 'spring'),
+    // Eiswolke: wie cloud, aber der Boden ist sehr rutschig. ground true für eine hohe Eisfläche
+    ice: (x, y, w, o = {}) => addPlat(createStaticPlatform(ctx, X(x), Y(y), w, { slick: true, ...o }), 'ice'),
+    // Blinkwolke: im Takt fest und weg. period in Sekunden (3,4 bis 4,4), phase 0..1 verschiebt den Takt
+    blink: (x, y, w, o = {}) => addPlat(createBlinkPlatform(ctx, X(x), Y(y), w, o), 'blink'),
     breakable: (x, y, w, o = {}) => addPlat(createBreakablePlatform(ctx, X(x), Y(y), w, o), 'breakable'),
 
     // Sterne (lokale Koordinaten)
@@ -94,23 +102,30 @@ export function createBuilder(s, { ox, oy, diff, meter, mechs, measure = false, 
 
     // Gegner (Plattformen hosten Gegner, immer 'static' oder 'breakable' Plattformen)
     walker(plat, t = 0.5, o = {}) {
-      const e = createWalker(ctx, plat, t, o);
+      const e = createWalker(ctx, plat, t, { pace, ...o });
       st.enemies.push(e); st.tags.add('walker'); track(e.x, e.y, e.w, e.h);
       return e;
     },
     jumper(plat, t = 0.5, o = {}) {
-      const e = createJumper(ctx, plat, t, o);
+      const e = createJumper(ctx, plat, t, { pace, ...o });
       st.enemies.push(e); st.tags.add('jumper'); track(e.x, e.y - 60, e.w, e.h + 60);
       return e;
     },
     charger(plat, t = 0.5, o = {}) {
-      const e = createCharger(ctx, plat, t, o);
+      const e = createCharger(ctx, plat, t, { pace, ...o });
       st.enemies.push(e); st.tags.add('charger'); track(e.x, e.y, e.w, e.h);
       return e;
     },
     flyer(x, y, o = {}) {
-      const e = createFlyer(ctx, X(x), Y(y), o);
+      const e = createFlyer(ctx, X(x), Y(y), { pace, ...o });
       st.enemies.push(e); st.tags.add('flyer'); track(e.minX, e.y - e.amp, e.maxX - e.minX + e.w, e.h + 2 * e.amp);
+      return e;
+    },
+
+    // Hagelwolke: schwebt, schießt nach Vorwarnung einen Fächer Hagel nach unten (hazards kind hail entstehen erst im Spiel)
+    hailcloud(x, y, o = {}) {
+      const e = createHailcloud(ctx, X(x), Y(y), { pace, ...o });
+      st.enemies.push(e); st.tags.add('hailcloud'); track(e.minX, e.y - e.amp, e.maxX - e.minX + e.w, e.h + 2 * e.amp + 160);
       return e;
     },
 
@@ -121,9 +136,15 @@ export function createBuilder(s, { ox, oy, diff, meter, mechs, measure = false, 
       return h;
     },
     lightning(x, o = {}) {
-      const h = createLightning(ctx, X(x), o);
+      const h = createLightning(ctx, X(x), { pace, ...o });
       st.hazards.push(h); st.tags.add('lightning'); track(h.x - LIGHTNING.WIDTH / 2, 0, LIGHTNING.WIDTH, 0);
       return h;
+    },
+    // Komet schlägt bei (x, y) ein. y ist die Oberkante des Bodens an dieser Stelle (lokal), dort muss eine Plattform liegen
+    comet(x, y, o = {}) {
+      const c = createComet(ctx, X(x), Y(y), { pace, ...o });
+      st.hazards.push(c); st.tags.add('comet'); track(c.x - COMET.W / 2, c.y - 160, COMET.W, 160);
+      return c;
     },
     wind(x, y, w, h, o = {}) {
       const z = createWind(ctx, X(x), Y(y), w, h, o);

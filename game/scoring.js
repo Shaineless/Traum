@@ -1,6 +1,6 @@
 // Punkte, Combo, Popups, Banner und Effekt-Trigger. Wird von allen Gameplay-Modulen benutzt.
 
-import { COMBO, LIMITS, METER, START_X } from './constants.js';
+import { ABILITY, COMBO, LIMITS, METER, START_X } from './constants.js';
 import { emit } from './particles.js';
 
 export const meters = (s) => Math.max(0, Math.floor((s.run.maxX - START_X) / METER));
@@ -15,12 +15,36 @@ export function banner(s, text, sub = '', dur = 2.6) {
   s.banner = { text, sub, t: 0, dur };
 }
 
+// Tonereignis vormerken (nimbus-game.js spielt sie ab, Tests ignorieren sie).
+// Namen: jump doublejump land star powerup stomp hurt shieldbreak dash throw slam glide spring comet hail
+//        glow strike gate combo event break die charge ice blink
+export function sfx(s, name, vol = 1) {
+  if (!s.sfx) s.sfx = [];
+  if (s.sfx.length >= LIMITS.MAX_SFX) s.sfx.shift();
+  s.sfx.push({ n: name, v: vol });
+}
+
 export const shake = (s, amp) => { s.fx.shake = Math.max(s.fx.shake, amp); };
 export const hitstop = (s, sec) => { s.fx.hitstop = Math.max(s.fx.hitstop, sec); };
 export const flash = (s, color, amt = 0.5) => { s.fx.flash = Math.max(s.fx.flash, amt); s.fx.flashColor = color; };
 
 export function addBonus(s, n) {
-  s.run.bonus += n;
+  s.run.bonus += s.player && s.player.power && s.player.power.double > 0 ? n * 2 : n; // Doppelpunkte Powerup
+}
+
+// Wurfstern aufladen: zehn Sterne ergeben einen, höchstens drei
+export function chargeAmmo(s, stars = 1) {
+  const p = s.player;
+  p.starAcc += stars;
+  while (p.starAcc >= ABILITY.AMMO.STARS_PER) {
+    p.starAcc -= ABILITY.AMMO.STARS_PER;
+    if (p.ammo < ABILITY.AMMO.MAX) {
+      p.ammo += 1;
+      sfx(s, 'charge');
+      popup(s, p.x + p.w / 2, p.y - 20, 'Wurfstern bereit', { color: '#ffd966', size: 14, dur: 1.1 });
+    }
+  }
+  if (p.ammo >= ABILITY.AMMO.MAX) p.starAcc = 0;
 }
 
 // Gegner besiegt. how: 'stomp' | 'dash'. Gibt die vergebenen Punkte zurück.
@@ -32,6 +56,8 @@ export function registerKill(s, enemy, how = 'stomp') {
   s.run.kills += 1;
   s.run.bestCombo = Math.max(s.run.bestCombo, s.combo.count);
   addBonus(s, pts);
+  if (s.combo.count >= 3 && s.player.ammo < ABILITY.AMMO.MAX) { s.player.ammo += 1; sfx(s, 'charge'); } // Belohnung für Combos
+  sfx(s, s.combo.count >= 2 ? 'combo' : 'stomp', Math.min(1, 0.7 + s.combo.count * 0.1));
   const cx = enemy.x + enemy.w / 2;
   const cy = enemy.y + enemy.h / 2;
   popup(s, cx, cy - 10, `+${pts}`, { color: '#ffe27a', size: 20 });
@@ -46,6 +72,8 @@ export function collectStar(s, star) {
   star.got = true;
   s.run.stars += 1;
   addBonus(s, star.value);
+  chargeAmmo(s, 1);
+  sfx(s, 'star', 0.6);
   emit(s, 'star', star.x, star.y);
   if (star.bonus === 'risk') popup(s, star.x, star.y - 14, `+${star.value}`, { color: '#ffd966', size: 17 });
   return star.value;

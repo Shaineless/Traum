@@ -23,5 +23,6 @@ const lines = [];
 for (let m = 0; m < maxMeters; m += 250) lines.push(`${String(m).padStart(5)} bis ${String(m + 250).padStart(5)} m: ${((buckets[m] || 0) / runs).toFixed(2)} Treffer pro Lauf`);
 console.log(`Bot ${skill}, ${runs} Läufe bis ${maxMeters} m`);
 console.log(lines.join('\n'));
+console.log('JSON:' + JSON.stringify({ skill, runs, buckets, chunks }));
 const worst = Object.entries(chunks).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c, n]) => `${c} ${n}`).join(', ');
 console.log('meiste Treffer in Abschnitten: ' + worst);

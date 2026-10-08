@@ -11,9 +11,10 @@ import { updateGates } from './gates.js';
 import { updateEvents } from './events.js';
 import { ensureAhead, updateHints } from './generator.js';
 import { updateParticles } from './particles.js';
+import { updateShots } from './shots.js';
 import { meters, updateCombo, updatePopups } from './scoring.js';
 
-export const NULL_INPUT = Object.freeze({ move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false });
+export const NULL_INPUT = Object.freeze({ move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false });
 
 const DYING_SLOW = 0.3;
 const DYING_TIME = 1.5; // echte Sekunden, danach Game Over
@@ -64,6 +65,7 @@ export function stepSim(s, input, dt = STEP) {
   updateObstacles(s, sdt);
   updateEnemies(s, sdt);
   updatePlayer(s, dying ? NULL_INPUT : input, sdt);
+  updateShots(s, sdt);
   if (!dying) {
     playerVsEnemies(s);
     playerVsHazards(s);
