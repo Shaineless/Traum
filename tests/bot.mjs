@@ -58,10 +58,14 @@ function evaluate(s, script) {
   return { damage, score: progress - (damage ? 2000 - t * 10 : 0) - (fell ? 500 : 0) };
 }
 
-export function playBot(seed, { maxMeters = 600, maxFrames = 60 * 60 * 12, keepLog = false } = {}) {
+export function playBot(seed, { maxMeters = 600, maxFrames = 60 * 60 * 12, keepLog = false, trace = false } = {}) {
   const s = newGame(seed);
   if (keepLog) s.gen.keepLog = true;
   const hits = [];
+  const rec = trace ? [] : null;
+  const marks = [];
+  let lastKills = 0;
+  let lastGates = 0;
   let current = SCRIPTS[0];
   let k = 0;
   let lastLives = s.lives;
@@ -87,9 +91,13 @@ export function playBot(seed, { maxMeters = 600, maxFrames = 60 * 60 * 12, keepL
       current = { ...current, start: k };
     }
     const input = current.f(k - current.start);
+    if (rec) rec.push((input.move + 1) | (input.jumpPressed ? 4 : 0) | (input.jumpHeld ? 8 : 0) | (input.dashPressed ? 16 : 0));
     stepSim(s, input, STEP);
     k++;
     frames++;
+    if (s.run.kills > lastKills) { marks.push({ frame: frames, meter: meters(s), kind: 'kill', combo: s.combo.count }); lastKills = s.run.kills; }
+    if (s.world.gatesPassed > lastGates) { marks.push({ frame: frames, meter: meters(s), kind: 'gate' }); lastGates = s.world.gatesPassed; }
+    if (s.events.active && !marks.some((m) => m.kind === 'event:' + s.events.active.type && m.frame > frames - 60 * 20)) marks.push({ frame: frames, meter: meters(s), kind: 'event:' + s.events.active.type });
     if (s.run.hits > lastHits || s.lives < lastLives) {
       hits.push({ meter: meters(s), chunk: chunkAt(s, s.player.x), cause: s.deathCause ? s.deathCause.label : '?', unavoidable: !!current.unavoidable, t: +s.t.toFixed(1) });
       lastHits = s.run.hits;
@@ -107,5 +115,7 @@ export function playBot(seed, { maxMeters = 600, maxFrames = 60 * 60 * 12, keepL
     kills: s.run.kills,
     planned,
     cause: s.deathCause,
+    trace: rec,
+    marks,
   };
 }
