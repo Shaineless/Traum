@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nimbus – Jump'n'Run</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        background: #0a061e;
+        font-family: system-ui, sans-serif;
+      }
+      main { width: min(100% - 32px, 960px); }
+    </style>
+  </head>
+  <body>
+    <main id="game"></main>
+    <script type="module">
+      import { createNimbusGame } from './nimbus-game.js';
+      createNimbusGame(document.getElementById('game'));
+    </script>
+  </body>
+</html>
