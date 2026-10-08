@@ -8,18 +8,20 @@
 // Kosten: Verläufe entstehen höchstens einmal pro Frame und Art (G), meist in lokalen
 // Koordinaten und mit translate wiederverwendet. Große Mengen (Sterne, Tropfen, Windlinien)
 // laufen in einem Pfad und werden mit wenigen Aufrufen gezeichnet. Bei sehr vielen sichtbaren
-// Objekten werden Details weggelassen (LOD_*), damit ein Frame in der Zeichenanzahl begrenzt bleibt.
+// Objekten werden Details weggelassen (COST und LOD), damit ein Frame in der Zeichenanzahl begrenzt bleibt.
 // Bei view.reduceMotion bleiben alle Formen und Warnungen erhalten, aber ohne Blinken,
-// Funkeln, Wackeln und mit langsamerer Bewegung.
+// Funkeln, Wackeln und Schweben. Nur Wetter und Tor bewegen sich langsamer weiter.
 
 import { H as H0, LIGHTNING, POWERUPS, SPIKE, W as W0, WIND } from '../constants.js';
 import { themeAt } from '../theme.js';
 
 const TAU = Math.PI * 2;
 const MARGIN = 150; // Objekte im Bereich minus MARGIN bis W plus MARGIN werden gezeichnet
-const LOD_PLATFORMS = 18; // ab so vielen sichtbaren Plattformen nur noch Grunddetails
-const LOD_STARS = 70; // ab so vielen sichtbaren Sternen keine Glanzpunkte und Funkeln
-const LOD_RISK = 10; // ab so vielen Risikosternen keine Aura
+// Geschätzte Kosten (Zeichenaufrufe) pro sichtbarem Objekt. Übersteigt die Summe LOD[0], entfallen
+// kleine Details, übersteigt sie LOD[1], bleiben nur noch die Grundformen. Im normalen Spiel
+// liegt die Summe weit darunter, die Stufen fangen nur ungewöhnlich volle Bilder ab.
+const COST = { plat: 50, star: 14, spike: 55, bolt: 75, zone: 100, power: 32, gate: 105 };
+const LOD = [1700, 3000];
 const STAR_RADIUS = { normal: 10, risk: 14, event: 7 };
 const SLANT = 0.22; // Regen fällt schräg: Verschiebung in x pro Pixel Fall
 const RAIN_SPEED = 400;
@@ -32,7 +34,7 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 const smooth = (v) => { const k = clamp01(v); return k * k * (3 - 2 * k); };
 const frac = (v) => v - Math.floor(v);
-const hash = (n) => frac(Math.sin(n * 12.9898 + 78.233) * 43758.5453);
+const hash = (n) => frac(Math.sin((Number.isFinite(n) ? n : 0) * 12.9898 + 78.233) * 43758.5453);
 
 // ---------- Farben ----------
 
@@ -108,15 +110,19 @@ function vertical(ctx, y0, y1, stops) {
 }
 
 const mkGroundBody = (ctx, p) => vertical(ctx, 0, 240, [0, p.bodyTop, 0.16, p.ground, 1, p.bodyBot]);
-const mkRimGlow = (ctx, p) => vertical(ctx, -16, 0, [0, tint(p.groundTop, 0), 1, tint(p.groundTop, 0.5)]);
+const mkRimV = (ctx, p) => vertical(ctx, -1, 0, [0, tint(p.groundTop, 0), 1, tint(p.groundTop, 1)]);
+const mkRimCap = (ctx, p) => unitRadial(ctx, [0, tint(p.groundTop, 1), 1, tint(p.groundTop, 0)]);
 const mkFlBody = (ctx, p) => vertical(ctx, 0, 16, [0, p.flTop, 0.45, p.fl, 1, p.flBot]);
-const mkFlGlow = (ctx, p) => vertical(ctx, -9, 0, [0, tint(p.groundTop, 0), 1, tint(p.groundTop, 0.4)]);
 const mkMvBody = (ctx, p) => vertical(ctx, 0, 16, [0, p.mvTop, 0.45, p.mv, 1, p.mvBot]);
 const mkBrBody = (ctx, p) => vertical(ctx, 0, 16, [0, p.brTop, 0.5, p.br, 1, p.brBot]);
+const mkRainVeil = (ctx) => unitRadial(ctx, [0, 'rgba(80,100,190,0.26)', 0.7, 'rgba(80,100,190,0.14)', 1, 'rgba(80,100,190,0)']);
 const mkWindSoft = (ctx, p) => unitRadial(ctx, [0, tint(p.mist, 0.2), 0.65, tint(p.mist, 0.1), 1, tint(p.mist, 0)]);
 const mkGateIn = (ctx) => unitRadial(ctx, [0, 'rgba(255,250,226,0.62)', 0.5, 'rgba(255,222,170,0.26)', 0.85, 'rgba(190,170,255,0.12)', 1, 'rgba(190,170,255,0)']);
 const mkGateAura = (ctx) => unitRadial(ctx, [0, 'rgba(255,236,180,0.34)', 0.55, 'rgba(255,214,150,0.14)', 1, 'rgba(255,214,150,0)']);
 const mkGateBase = (ctx) => unitRadial(ctx, [0, 'rgba(255,240,190,0.7)', 1, 'rgba(255,240,190,0)']);
+const mkTrail = (ctx) => vertical(ctx, -1, 0, [0, 'rgba(255,225,120,0)', 1, 'rgba(255,225,120,0.5)']);
+const mkColumn = (ctx) => vertical(ctx, 0, 1, [0, 'rgba(255,244,170,0.05)', 0.7, 'rgba(255,240,150,0.85)', 1, 'rgba(255,240,150,1)']);
+const mkSteam = (ctx) => unitRadial(ctx, [0, 'rgba(236,240,255,0.8)', 0.5, 'rgba(236,240,255,0.35)', 1, 'rgba(236,240,255,0)']);
 const mkFlash = (ctx) => unitRadial(ctx, [0, 'rgba(255,255,236,0.95)', 0.35, 'rgba(255,240,150,0.5)', 1, 'rgba(255,230,120,0)']);
 const mkGold = (ctx) => unitRadial(ctx, [0, 'rgba(255,214,80,0.55)', 0.5, 'rgba(255,190,60,0.22)', 1, 'rgba(255,190,60,0)']);
 const mkCloudGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,248,200,1)', 0.45, 'rgba(255,226,120,0.6)', 1, 'rgba(255,210,90,0)']);
@@ -188,6 +194,25 @@ function dash(ctx, pattern, offset = 0) {
   ctx.lineDashOffset = offset;
 }
 
+// Weicher Schein über einer Oberkante (Ursprung auf der Kante): Mittelstück als senkrechter
+// Verlauf, an beiden Enden Viertelellipsen mit Radius r, damit nirgends eine harte Kante steht.
+function rimGlow(f, w, hg, alpha, r) {
+  const { ctx } = f;
+  const k = Math.min(r, w / 2);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.scale(1, hg);
+  ctx.fillStyle = G(f, 'rimV', mkRimV);
+  ctx.fillRect(k, -1, w - 2 * k, 1);
+  ctx.scale(k, 1);
+  ctx.fillStyle = G(f, 'rimCap', mkRimCap);
+  ctx.translate(1, 0);
+  ctx.fillRect(-1, -1, 1, 1);
+  ctx.translate((w - 2 * k) / k, 0);
+  ctx.fillRect(0, -1, 1, 1);
+  ctx.restore();
+}
+
 // ---------- Rahmen eines Frames ----------
 
 const visX = (f, x0, x1) => x1 - f.cam >= -MARGIN && x0 - f.cam <= f.W + MARGIN;
@@ -208,41 +233,35 @@ function platOk(p) {
   return !!p && p.w > 0 && Number.isFinite(p.x) && Number.isFinite(p.y) && p.w < FAR;
 }
 
-// Zählt, was im Bild liegt. Ist es nichts, wird gar nichts gezeichnet.
+// Schätzt die Kosten des Bildes (siehe COST). Liegt nichts im Bild, ist das Ergebnis 0 und es wird nichts gezeichnet.
 function scan(s, cam, W) {
   const lo = cam - MARGIN;
   const hi = cam + W + MARGIN;
-  const r = { any: 0, plat: 0, star: 0, risk: 0 };
-  const lists = s.platforms || [];
-  for (let i = 0; i < lists.length; i++) {
-    const p = lists[i];
+  let cost = 0;
+  for (const p of s.platforms || []) {
     if (!platOk(p)) continue;
     const e = platExtent(p);
-    if (e[1] >= lo && e[0] <= hi) r.plat++;
+    if (e[1] >= lo && e[0] <= hi) cost += COST.plat;
   }
   for (const h of s.hazards || []) {
-    if (h && Number.isFinite(h.x) && h.x >= lo - 80 && h.x <= hi + 80) r.any++;
+    if (h && Number.isFinite(h.x) && h.x >= lo - 80 && h.x <= hi + 80) cost += h.kind === 'lightning' ? COST.bolt : COST.spike;
   }
   for (const z of s.zones || []) {
-    if (z && Number.isFinite(z.x) && z.w > 0 && z.x + z.w >= lo && z.x <= hi) r.any++;
+    if (z && Number.isFinite(z.x) && z.w > 0 && z.x + z.w >= lo && z.x <= hi) cost += COST.zone;
   }
   for (const st of s.stars || []) {
-    if (st && !st.got && Number.isFinite(st.x) && st.x >= lo - 30 && st.x <= hi + 30) {
-      r.star++;
-      if (st.bonus === 'risk') r.risk++;
-    }
+    if (st && !st.got && Number.isFinite(st.x) && st.x >= lo - 30 && st.x <= hi + 30) cost += COST.star;
   }
   for (const u of s.powerups || []) {
-    if (u && !u.got && Number.isFinite(u.x) && u.x >= lo - 30 && u.x <= hi + 30) r.any++;
+    if (u && !u.got && Number.isFinite(u.x) && u.x >= lo - 30 && u.x <= hi + 30) cost += COST.power;
   }
   for (const g of s.gates || []) {
-    if (g && Number.isFinite(g.x) && g.x >= lo - 100 && g.x <= hi + 100) r.any++;
+    if (g && Number.isFinite(g.x) && g.x >= lo - 100 && g.x <= hi + 100) cost += COST.gate;
   }
-  r.any += r.plat + r.star;
-  return r;
+  return cost;
 }
 
-function makeFrame(ctx, s, view, W, H, n) {
+function makeFrame(ctx, s, view, W, H, cost) {
   const calm = !!view.reduceMotion;
   const time = num(view.time, num(s.realT, 0));
   const t = themeAt(s.world || { from: 0, to: 0, blend: 1 });
@@ -250,7 +269,7 @@ function makeFrame(ctx, s, view, W, H, n) {
     ctx, s, view, W, H, cam: num(view.camX, 0), time, calm,
     t: time * (calm ? 0.35 : 1), // Takt für alle Bewegungen
     pal: makePalette(t), g: {},
-    lodPlat: n.plat > LOD_PLATFORMS, lodStar: n.star > LOD_STARS, lodRisk: n.risk > LOD_RISK,
+    lodSmall: cost > LOD[0], lodMin: cost > LOD[1], // kleine Details weglassen, nur Grundformen
   };
 }
 
@@ -260,9 +279,9 @@ export function drawWorld(ctx, s, view) {
   if (!ctx || !s || !view) return;
   const W = num(view.W, W0);
   const H = num(view.H, H0);
-  const n = scan(s, num(view.camX, 0), W);
-  if (!n.any) return;
-  const f = makeFrame(ctx, s, view, W, H, n);
+  const cost = scan(s, num(view.camX, 0), W);
+  if (!cost) return;
+  const f = makeFrame(ctx, s, view, W, H, cost);
   ctx.save();
   drawRainZones(f);
   drawWindZones(f);
@@ -292,7 +311,7 @@ function drawPlatforms(f) {
     vis.push(p);
   }
   // Gleisspuren zuerst, damit keine Plattform von einer fremden Spur überdeckt wird
-  for (let i = 0; i < vis.length; i++) if (vis[i].kind === 'moving') drawTrack(f, vis[i]);
+  if (!f.lodMin) for (let i = 0; i < vis.length; i++) if (vis[i].kind === 'moving') drawTrack(f, vis[i]);
   for (let i = 0; i < vis.length; i++) {
     const p = vis[i];
     if (p.kind === 'moving') drawMoving(f, p);
@@ -323,15 +342,17 @@ function drawGround(f, p) {
   ctx.save();
   ctx.clip();
   // weiche Wolkenflecken im Inneren
-  ctx.fillStyle = pal.puff;
-  ctx.globalAlpha = 0.1;
-  ctx.beginPath();
-  for (let k = Math.floor(a / 110); k <= Math.ceil(b / 110); k++) {
-    const hx = hash(p.id * 3.7 + k);
-    const hy = hash(p.id * 1.3 + k * 2.9);
-    blob(ctx, k * 110 + 20 + hx * 70, 26 + hy * 60, 34 + hx * 22, 9 + hy * 8);
+  if (!f.lodMin) {
+    ctx.fillStyle = pal.puff;
+    ctx.globalAlpha = 0.1;
+    ctx.beginPath();
+    for (let k = Math.floor(a / 110); k <= Math.ceil(b / 110); k++) {
+      const hx = hash(p.id * 3.7 + k);
+      const hy = hash(p.id * 1.3 + k * 2.9);
+      blob(ctx, k * 110 + 20 + hx * 70, 26 + hy * 60, 34 + hx * 22, 9 + hy * 8);
+    }
+    ctx.fill();
   }
-  ctx.fill();
   ctx.globalAlpha = 1;
   // leuchtender Rand und Kanten
   ctx.fillStyle = pal.groundTop;
@@ -349,11 +370,9 @@ function drawGround(f, p) {
   ctx.globalAlpha = 1;
   ctx.restore();
 
-  // Schein über dem Rand
-  ctx.fillStyle = G(f, 'rimGlow', mkRimGlow);
-  ctx.fillRect(a, -16, b - a, 16);
+  rimGlow(f, w, 16, 0.5, 14);
 
-  if (!f.lodPlat) groundDecor(f, p, a, b);
+  if (!f.lodSmall) groundDecor(f, p, a, b);
   ctx.restore();
 }
 
@@ -391,7 +410,7 @@ function groundDecor(f, p, a, b) {
   for (let k = k0; k <= k1; k++) {
     const lx = k * cell + 12 + hash(p.id * 2.3 + k) * (cell - 24);
     if (lx < 14 || lx > p.w - 14) continue;
-    if (hash(p.id * 5.1 + k * 1.7) >= 0.2 || hash(p.id * 5.1 + k * 1.7) < 0.0) continue;
+    if (hash(p.id * 5.1 + k * 1.7) >= 0.2) continue; // nur dort, wo kein Gras steht
     blob(ctx, lx, -2.5, 9, 4.5);
     blob(ctx, lx - 9, -1.3, 6, 3.6);
     blob(ctx, lx + 9, -1.3, 7, 3.8);
@@ -411,7 +430,7 @@ function drawFloater(f, p) {
   ctx.save();
   ctx.translate(x, p.y);
 
-  if (!f.lodPlat) {
+  if (!f.lodSmall) {
     // Wolkenbäuche unter dem Körper
     const n = clamp(Math.round(w / 34), 2, 6);
     ctx.fillStyle = pal.flPuff;
@@ -428,8 +447,7 @@ function drawFloater(f, p) {
   pill(ctx, 0, 0, w, h, h / 2);
   ctx.fill();
 
-  ctx.fillStyle = G(f, 'flGlow', mkFlGlow);
-  ctx.fillRect(2, -9, w - 4, 9);
+  rimGlow(f, w, 10, 0.42, h / 2);
   ctx.strokeStyle = pal.groundTop;
   ctx.lineWidth = 2.6;
   ctx.lineCap = 'round';
@@ -494,7 +512,7 @@ function drawMoving(f, p) {
 
   // Antrieb unter dem Körper: leuchtende Düsen mit kleiner Flamme
   const flick = f.calm ? 0.5 : 0.5 + 0.5 * Math.sin(f.t * 9 + p.id);
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < (f.lodMin ? 0 : 2); i++) {
     const nx = w * (i === 0 ? 0.24 : 0.76);
     ctx.fillStyle = pal.accent;
     ctx.globalAlpha = 0.22 + 0.1 * flick;
@@ -555,7 +573,7 @@ function drawMoving(f, p) {
   ctx.globalAlpha = 1;
 
   // Lämpchen entlang der Kante
-  if (!f.lodPlat) {
+  if (!f.lodSmall) {
     const lights = clamp(Math.floor((w - 40) / 22), 0, 5);
     ctx.fillStyle = pal.accent;
     ctx.globalAlpha = 0.85;
@@ -594,7 +612,7 @@ function drawBreakable(f, p) {
   // bröckelnde Unterkante
   ctx.fillStyle = pal.brBot;
   ctx.beginPath();
-  const teeth = clamp(Math.round(w / 15), 2, 12);
+  const teeth = f.lodMin ? 2 : clamp(Math.round(w / 15), 2, 12);
   const seg = (w - 8) / teeth;
   ctx.moveTo(4, h - 3);
   for (let i = 0; i < teeth; i++) {
@@ -618,7 +636,7 @@ function drawBreakable(f, p) {
   ctx.stroke();
 
   // Risse, bei armed und shaking von innen leuchtend
-  const cracks = clamp(Math.round(w / 38), 2, 6);
+  const cracks = f.lodMin ? 1 : clamp(Math.round(w / 38), 2, 6);
   ctx.beginPath();
   for (let i = 0; i < cracks; i++) {
     const cx = (w * (i + 0.5)) / cracks + (hash(p.id * 3.1 + i) - 0.5) * 12;
@@ -642,7 +660,7 @@ function drawBreakable(f, p) {
   ctx.stroke();
 
   // Krümel fallen beim Wackeln
-  if (shaking) {
+  if (shaking && !f.lodMin) {
     ctx.fillStyle = pal.brBot;
     for (let i = 0; i < 3; i++) {
       const k = frac(timer * 2.4 + i * 0.37);
@@ -686,18 +704,20 @@ function drawRain(f, z) {
   const cx = x + w / 2;
 
   if (inten > 0.02 && bottom > y) {
-    // kaum sichtbarer Schleier: zeigt, wo es rutschig ist
-    const veil = ctx.createLinearGradient(0, y, 0, bottom);
-    veil.addColorStop(0, 'rgba(70,90,170,0.2)');
-    veil.addColorStop(1, 'rgba(70,90,170,0.02)');
+    // kaum sichtbarer Schleier mit weichen Rändern: zeigt, wo es rutschig ist
+    const hh = (bottom - y) / 2;
+    const ry = hh * 1.3;
+    ctx.save();
+    ctx.translate(cx, y + hh);
+    ctx.scale(w * 0.6, ry);
     ctx.globalAlpha = inten;
-    ctx.fillStyle = veil;
-    ctx.fillRect(x + 6, y, w - 12, bottom - y);
-    ctx.globalAlpha = 1;
+    ctx.fillStyle = G(f, 'rainVeil', mkRainVeil);
+    ctx.fillRect(-1, -hh / ry, 2, (2 * hh) / ry);
+    ctx.restore();
   }
 
   if (wet && bottom > y) {
-    const n = Math.round(8 + 26 * inten);
+    const n = Math.round((f.lodMin ? 6 : 10) + (f.lodMin ? 14 : 40) * inten);
     const span = bottom - y + 10;
     const lane = cw - 24;
     ctx.save();
@@ -741,6 +761,25 @@ function drawRain(f, z) {
   ctx.globalAlpha = 1;
 }
 
+// Strecke, die eine Linie mit Richtung (ux, uy) und Seitenversatz side durch ein Feld der Größe w mal h
+// (Mitte im Ursprung) läuft, als Bereich [a0, a1] entlang der Richtung. null, wenn sie das Feld verfehlt.
+function lineSpan(ux, uy, side, w, h) {
+  let a0 = -Infinity;
+  let a1 = Infinity;
+  const axes = [[ux, -uy * side, w / 2 - 3], [uy, ux * side, h / 2 - 3]]; // Richtung, Versatz, Halbmaß
+  for (const [d, off, half] of axes) {
+    if (Math.abs(d) < 1e-6) {
+      if (Math.abs(off) > half) return null;
+      continue;
+    }
+    const lo = (-half - off) / d;
+    const hi = (half - off) / d;
+    a0 = Math.max(a0, Math.min(lo, hi));
+    a1 = Math.min(a1, Math.max(lo, hi));
+  }
+  return a1 - a0 > 10 ? [a0, a1] : null;
+}
+
 function drawWindZones(f) {
   const list = f.s.zones || [];
   for (let i = 0; i < list.length; i++) {
@@ -777,54 +816,54 @@ function drawWind(f, z) {
   const uy = dy / len;
   const nx = -uy;
   const ny = ux;
-  const lFlow = Math.abs(ux) * w + Math.abs(uy) * h;
   const lPerp = Math.abs(uy) * w + Math.abs(ux) * h;
   const cx = x + w / 2;
   const cy = z.y + h / 2;
-  const count = clamp(Math.round(((w * h) / 7500) * (0.6 + st)), 3, 11);
+  const count = clamp(Math.round(((w * h) / 7500) * (0.6 + st)), 3, f.lodMin ? 4 : 11);
 
+  // Schlieren: schlanke Windfähnchen, vorn dick und hinten spitz, so ist die Richtung ablesbar.
+  // Der Schweif bleibt immer im Feld, die Schliere blendet am Anfang und Ende nur aus.
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, z.y, w, h);
-  ctx.clip();
-  ctx.strokeStyle = pal.mist;
-  ctx.lineCap = 'round';
-  ctx.lineWidth = 1.7;
+  ctx.fillStyle = pal.mist;
   const bendOn = f.calm ? 0 : 1;
+  const wd = 1.3 + 1.2 * st;
   for (let i = 0; i < count; i++) {
     const sd = z.id * 1.31 + i * 7.7;
-    const streak = 26 + 40 * st * (0.6 + 0.8 * hash(sd + 1));
-    const span = lFlow + streak;
+    const side = (hash(sd) - 0.5) * lPerp * 0.86;
+    const span = lineSpan(ux, uy, side, w, h);
+    if (!span) continue;
+    const room = span[1] - span[0];
+    const streak = Math.min(room * 0.55, 24 + 40 * st * (0.6 + 0.8 * hash(sd + 1)));
+    const travel = room - streak;
     const speed = (40 + 220 * st) * (0.8 + 0.4 * hash(sd + 2));
-    const u = frac((f.t * speed) / span + hash(sd + 3));
-    const along = (u - 0.5) * span;
-    const side = (hash(sd) - 0.5) * lPerp * 0.92;
+    const u = frac((f.t * speed) / travel + hash(sd + 3));
+    const along = span[0] + streak + u * travel; // Position des Kopfes
     const hx = cx + ux * along + nx * side;
     const hy = cy + uy * along + ny * side;
     const tx = hx - ux * streak;
     const ty = hy - uy * streak;
     const bend = Math.sin(f.t * 1.7 + i * 2) * 4 * bendOn;
-    ctx.globalAlpha = Math.pow(Math.sin(Math.PI * u), 0.8) * (0.3 + 0.45 * st);
+    const mx = (hx + tx) / 2 + nx * bend;
+    const my = (hy + ty) / 2 + ny * bend;
+    ctx.globalAlpha = Math.pow(Math.sin(Math.PI * u), 0.7) * (0.35 + 0.45 * st);
     ctx.beginPath();
     ctx.moveTo(tx, ty);
-    ctx.quadraticCurveTo((hx + tx) / 2 + nx * bend, (hy + ty) / 2 + ny * bend, hx, hy);
-    if (i % 3 === 0) {
-      // kleiner Wirbel am Ende, wie auf Wetterkarten
-      const r = 3 + 2 * st;
-      ctx.arc(hx + nx * r, hy + ny * r, r, Math.atan2(-ny, -nx), Math.atan2(-ny, -nx) + 4.2);
-    }
-    ctx.stroke();
+    ctx.quadraticCurveTo(mx + nx * wd, my + ny * wd, hx + nx * wd, hy + ny * wd);
+    ctx.quadraticCurveTo(hx + ux * wd * 1.4, hy + uy * wd * 1.4, hx - nx * wd, hy - ny * wd);
+    ctx.quadraticCurveTo(mx - nx * wd, my - ny * wd, tx, ty);
+    ctx.fill();
   }
   // Schwebeteilchen im Wind
   ctx.fillStyle = pal.mist;
   ctx.globalAlpha = 0.5;
   ctx.beginPath();
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < (f.lodMin ? 0 : 4); i++) {
     const sd = z.id * 0.61 + i * 4.3;
-    const span = lFlow + 20;
-    const u = frac((f.t * (30 + 120 * st) * (0.8 + 0.4 * hash(sd))) / span + hash(sd + 1));
-    const along = (u - 0.5) * span;
     const side = (hash(sd + 2) - 0.5) * lPerp * 0.9;
+    const span = lineSpan(ux, uy, side, w, h);
+    if (!span) continue;
+    const u = frac((f.t * (30 + 120 * st) * (0.8 + 0.4 * hash(sd))) / (span[1] - span[0]) + hash(sd + 1));
+    const along = span[0] + u * (span[1] - span[0]);
     disc(ctx, cx + ux * along + nx * side, cy + uy * along + ny * side, 1.5);
   }
   ctx.fill();
@@ -849,69 +888,72 @@ function drawSpikes(f) {
 function drawSpike(f, haz, w, h) {
   const { ctx } = f;
   const cx = w / 2;
-  const cy = h - 10;
+  const cy = h - 9; // Mitte des Stachelkranzes
   const N = 7;
+  const step = Math.PI / N;
   ctx.save();
   ctx.translate(haz.x - f.cam, haz.y);
 
-  // Sternkranz aus elektrisch gelben Stacheln, halb hinter dem Körper
+  // Kranz aus elektrisch gelben Stacheln, fächert nach oben und zu den Seiten
   const tipX = [];
   const tipY = [];
   ctx.beginPath();
-  ctx.moveTo(2, h);
   for (let i = 0; i < N; i++) {
-    const a = Math.PI * (1 + i / (N - 1));
-    const rt = (i % 2 === 0 ? 17.5 : 14.5) + (i === 3 ? 2 : 0);
-    const px = cx + Math.cos(a) * rt * (w / 36) * 1.0;
-    const py = cy + Math.sin(a) * rt;
-    tipX.push(px);
-    tipY.push(py);
-    const va = a - Math.PI / (N - 1) / 2;
-    if (i > 0) ctx.lineTo(cx + Math.cos(va) * 9.5, cy + Math.sin(va) * 9.5);
-    ctx.lineTo(px, py);
+    const a = Math.PI + (i + 0.5) * step;
+    const r = i === 3 ? 20 : i % 2 === 0 ? 17 : 14.5;
+    const tx = cx + Math.cos(a) * r * (w / 36);
+    const ty = cy + Math.sin(a) * r;
+    tipX.push(tx);
+    tipY.push(ty);
+    const v = a - step / 2;
+    if (i === 0) ctx.moveTo(cx + Math.cos(v) * 8, cy + Math.sin(v) * 8);
+    else ctx.lineTo(cx + Math.cos(v) * 8, cy + Math.sin(v) * 8);
+    ctx.lineTo(tx, ty);
   }
-  ctx.lineTo(w - 2, h);
+  ctx.lineTo(cx + Math.cos(2 * Math.PI) * 8, cy);
   ctx.closePath();
-  ctx.fillStyle = C.spike;
-  ctx.shadowColor = 'rgba(255,233,74,0.9)';
-  ctx.shadowBlur = 9;
-  ctx.fill();
-  ctx.shadowBlur = 0;
   ctx.lineJoin = 'round';
+  if (!f.lodMin) {
+    ctx.strokeStyle = 'rgba(255,233,74,0.28)';
+    ctx.lineWidth = 6;
+    ctx.stroke();
+  }
+  ctx.fillStyle = C.spike;
+  ctx.fill();
   ctx.strokeStyle = C.spikeEdge;
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   // dunkler Wolkenkörper
   ctx.fillStyle = C.spikeBody;
   ctx.beginPath();
-  blob(ctx, cx, h - 7, w * 0.5 - 1, 7.5);
-  blob(ctx, cx - 9, h - 11, 9, 7.5);
-  blob(ctx, cx + 8, h - 12.5, 10, 9);
-  blob(ctx, cx, h - 15, 9, 7.5);
+  blob(ctx, cx, h - 6.5, w * 0.5 - 3, 6.5);
+  blob(ctx, cx - 8, h - 10, 8, 6.5);
+  blob(ctx, cx + 7, h - 11, 9, 7.5);
+  blob(ctx, cx, h - 13.5, 8, 6.5);
   ctx.fill();
   ctx.fillStyle = C.spikeBodyHi;
-  ctx.globalAlpha = 0.55;
+  ctx.globalAlpha = 0.6;
   ctx.beginPath();
-  blob(ctx, cx - 5, h - 19, 6, 2.6);
-  blob(ctx, cx + 9, h - 17, 3.5, 2);
+  blob(ctx, cx - 4, h - 17, 5, 2.2);
+  blob(ctx, cx + 9, h - 15, 3, 1.8);
   ctx.fill();
   ctx.globalAlpha = 1;
 
   // Blitzzeichen auf dem Körper: auch ohne Farbe als Gefahr lesbar
   ctx.fillStyle = C.spike;
   ctx.beginPath();
-  ctx.moveTo(cx + 2.4, h - 17);
-  ctx.lineTo(cx - 3.4, h - 8.6);
-  ctx.lineTo(cx - 0.2, h - 8.6);
-  ctx.lineTo(cx - 2.4, h - 2.2);
-  ctx.lineTo(cx + 4, h - 11);
-  ctx.lineTo(cx + 0.6, h - 11);
+  ctx.moveTo(cx + 2.2, h - 15.5);
+  ctx.lineTo(cx - 3.2, h - 8);
+  ctx.lineTo(cx - 0.2, h - 8);
+  ctx.lineTo(cx - 2.2, h - 2.5);
+  ctx.lineTo(cx + 3.6, h - 10);
+  ctx.lineTo(cx + 0.6, h - 10);
   ctx.closePath();
   ctx.fill();
 
   // Knistern: ein kurzer Funkenbogen zwischen zwei Spitzen, dazu ein Funke darüber
-  if (!f.calm) {
+  if (!f.calm && !f.lodMin) {
     const beat = Math.floor(f.time * 9 + haz.id * 1.7);
     if (hash(beat * 3.1 + haz.id) > 0.38) {
       const k = Math.floor(hash(beat + haz.id * 0.3) * (N - 1));
@@ -1005,13 +1047,13 @@ function drawColumn(f, h, x, cy, w, iy, mark, strike, flick) {
   // Schein der Säule
   const body = strike ? 0.34 : h.phase === 'flicker' ? 0.1 + 0.08 * flick : 0;
   if (body > 0) {
-    const g = ctx.createLinearGradient(0, top, 0, bottom);
-    g.addColorStop(0, 'rgba(255,244,170,0.05)');
-    g.addColorStop(0.7, 'rgba(255,240,150,0.85)');
-    g.addColorStop(1, 'rgba(255,240,150,1)');
+    ctx.save();
+    ctx.translate(x0, top);
+    ctx.scale(w, bottom - top);
     ctx.globalAlpha = body;
-    ctx.fillStyle = g;
-    ctx.fillRect(x0, top, w, bottom - top);
+    ctx.fillStyle = G(f, 'column', mkColumn);
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.restore();
   }
 
   // gestrichelte Ränder, laufen nach unten (bei reduceMotion still)
@@ -1050,7 +1092,7 @@ function drawColumn(f, h, x, cy, w, iy, mark, strike, flick) {
   ctx.fill();
 
   // Warndreieck mit Ausrufezeichen über dem Ziel
-  if (mark > 0.4) {
+  if (mark > 0.4 && !strike) {
     const bob = f.calm ? 0 : Math.sin(f.time * 7) * 2;
     const ty = iy - 36 + bob;
     const s = h.phase === 'glow' ? 0.8 : 1;
@@ -1148,19 +1190,18 @@ function drawThunderCloud(f, h, charge, strike, cool, flick) {
   const timer = num(h.timer);
   const coolK = cool ? clamp01(timer / Math.max(0.1, LIGHTNING.COOLDOWN)) : 0;
 
-  // Dampf beim Abkühlen: blasse Wölkchen steigen auf
+  // Dampf beim Abkühlen: weiche blasse Wölkchen steigen auf
   if (cool && coolK > 0.02) {
-    ctx.fillStyle = '#e9ecff';
+    ctx.fillStyle = G(f, 'steam', mkSteam);
     for (let i = 0; i < 4; i++) {
       const k = 1 - coolK;
-      const px = (i - 1.5) * 24 + Math.sin(f.t * 2 + i) * 3;
-      const py = -34 - k * 20 - i * 3;
-      ctx.globalAlpha = coolK * 0.3;
-      ctx.beginPath();
-      blob(ctx, px, py, 9 + k * 5, 5 + k * 3);
-      ctx.fill();
+      ctx.save();
+      ctx.translate((i - 1.5) * 24 + Math.sin(f.t * 2 + i) * 3, -34 - k * 20 - i * 3);
+      ctx.scale(14 + k * 6, 9 + k * 4);
+      ctx.globalAlpha = coolK * 0.5;
+      ctx.fillRect(-1, -1, 2, 2);
+      ctx.restore();
     }
-    ctx.globalAlpha = 1;
   }
 
   const lit = strike ? 1 : cool ? coolK * 0.35 : charge * flick;
@@ -1240,85 +1281,86 @@ function starPose(f, st, group, out) {
   const r0 = STAR_RADIUS[group];
   out.x = st.x - f.cam;
   out.y = st.y + (calm ? 0 : Math.sin(f.t * 2.2 + ph) * 2.5);
-  out.r = r0 * (1 + (calm ? 0.03 : 0.1) * Math.sin(f.t * 3.2 + ph * 1.7));
+  out.r = r0 * (calm ? 1 : 1 + 0.1 * Math.sin(f.t * 3.2 + ph * 1.7));
   out.rot = calm ? 0 : Math.sin(f.t * 1.4 + ph) * 0.12;
 }
 
 function drawStars(f) {
   const list = f.s.stars || [];
   if (!list.length) return;
-  const pose = { x: 0, y: 0, r: 0, rot: 0 };
-  // Spuren fallender Sterne unter allen Körpern
+  // Sichtbare Sterne einmal nach Art einsammeln
+  const groups = { normal: [], risk: [], event: [] };
   for (let i = 0; i < list.length; i++) {
     const st = list[i];
-    if (!st || st.got || !st.falling || !Number.isFinite(st.x) || !Number.isFinite(st.y)) continue;
-    if (!visX(f, st.x - 20, st.x + 20)) continue;
-    starPose(f, st, starGroup(st), pose);
-    drawTrail(f, st, pose);
+    if (!st || st.got || !Number.isFinite(st.x) || !Number.isFinite(st.y) || !visX(f, st.x - 20, st.x + 20)) continue;
+    groups[starGroup(st)].push(st);
   }
-  for (const group of ['normal', 'risk', 'event']) drawStarGroup(f, list, group, pose);
+  const pose = { x: 0, y: 0, r: 0, rot: 0 };
+  // Spuren fallender Sterne unter allen Körpern
+  if (!f.lodMin) {
+    for (const group of GROUPS) {
+      for (const st of groups[group]) {
+        if (!st.falling) continue;
+        starPose(f, st, group, pose);
+        drawTrail(f, st, pose);
+      }
+    }
+  }
+  for (const group of GROUPS) if (groups[group].length) drawStarGroup(f, groups[group], group, pose);
 }
 
 function drawTrail(f, st, pose) {
   const { ctx } = f;
   const started = !!st.started;
-  const len = started ? 24 + clamp(num(st.vy), 0, 400) * 0.16 : 9;
-  const wd = pose.r * 0.55;
   ctx.save();
-  const g = ctx.createLinearGradient(0, pose.y - len, 0, pose.y);
-  g.addColorStop(0, 'rgba(255,225,120,0)');
-  g.addColorStop(1, `rgba(255,225,120,${started ? 0.5 : 0.3})`);
-  ctx.fillStyle = g;
+  ctx.translate(pose.x, pose.y);
+  ctx.scale(pose.r * 0.55, started ? 24 + clamp(num(st.vy), 0, 400) * 0.16 : 9);
+  ctx.globalAlpha = started ? 1 : 0.6;
+  ctx.fillStyle = G(f, 'trail', mkTrail);
   ctx.beginPath();
-  ctx.moveTo(pose.x - wd, pose.y);
-  ctx.lineTo(pose.x, pose.y - len);
-  ctx.lineTo(pose.x + wd, pose.y);
+  ctx.moveTo(-1, 0);
+  ctx.lineTo(0, -1);
+  ctx.lineTo(1, 0);
   ctx.closePath();
   ctx.fill();
   ctx.restore();
 }
 
-function drawStarGroup(f, list, group, pose) {
+const GROUPS = ['normal', 'risk', 'event'];
+const STAR_STYLE = {
+  normal: { fill: C.star, halo: 'rgba(255,217,102,', hi: C.starHi, glint: '#fffbe0', wide: 10 },
+  risk: { fill: C.risk, halo: 'rgba(255,170,40,', hi: '#fff2c4', glint: '#fffbe0', wide: 13 },
+  event: { fill: C.event, halo: 'rgba(170,240,255,', hi: '#ffffff', glint: '#e9fbff', wide: 10 },
+};
+
+// Alle Sterne einer Art in wenigen Pfaden: Körper, Glanzpunkte, Funkeln, Aura
+function drawStarGroup(f, stars, group, pose) {
   const { ctx } = f;
-  const style = group === 'risk'
-    ? { fill: C.risk, edge: C.riskEdge, halo: 'rgba(255,170,40,', hi: '#fff2c4' }
-    : group === 'event'
-      ? { fill: C.event, edge: '#ffe9a0', halo: 'rgba(170,240,255,', hi: '#ffffff' }
-      : { fill: C.star, edge: '#ffc83d', halo: 'rgba(255,217,102,', hi: C.starHi };
-  let n = 0;
-  // Körper
+  const style = STAR_STYLE[group];
   ctx.beginPath();
-  for (let i = 0; i < list.length; i++) {
-    const st = list[i];
-    if (!st || st.got || !Number.isFinite(st.x) || !Number.isFinite(st.y) || starGroup(st) !== group) continue;
-    if (!visX(f, st.x - 20, st.x + 20)) continue;
+  for (const st of stars) {
     starPose(f, st, group, pose);
     pentagram(ctx, pose.x, pose.y, pose.r, pose.rot);
-    n++;
   }
-  if (!n) return;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = `${style.halo}0.1)`;
-  ctx.lineWidth = group === 'risk' ? 13 : 10;
+  ctx.lineWidth = style.wide;
   ctx.stroke();
   ctx.strokeStyle = `${style.halo}0.22)`;
-  ctx.lineWidth = group === 'risk' ? 8 : 6;
+  ctx.lineWidth = style.wide * 0.6;
   ctx.stroke();
   ctx.fillStyle = style.fill;
   ctx.strokeStyle = style.fill;
   ctx.lineWidth = group === 'risk' ? 3.6 : 2.6;
   ctx.fill();
   ctx.stroke();
+  if (f.lodSmall) return;
 
-  if (f.lodStar) return;
   // Glanzpunkt in der Mitte
   ctx.fillStyle = style.hi;
   ctx.globalAlpha = 0.85;
   ctx.beginPath();
-  for (let i = 0; i < list.length; i++) {
-    const st = list[i];
-    if (!st || st.got || !Number.isFinite(st.x) || !Number.isFinite(st.y) || starGroup(st) !== group) continue;
-    if (!visX(f, st.x - 20, st.x + 20)) continue;
+  for (const st of stars) {
     starPose(f, st, group, pose);
     disc(ctx, pose.x - pose.r * 0.12, pose.y - pose.r * 0.08, pose.r * 0.2);
   }
@@ -1327,15 +1369,12 @@ function drawStarGroup(f, list, group, pose) {
 
   // Funkeln: ein kleines Kreuz, das bei jedem Stern zu seiner eigenen Zeit aufblitzt.
   // Eventsterne und Risikosterne funkeln immer ein wenig, auch bei reduceMotion (dann ohne Wechsel).
-  ctx.strokeStyle = group === 'event' ? '#e9fbff' : '#fffbe0';
+  ctx.strokeStyle = style.glint;
   ctx.lineWidth = 1.3;
   ctx.lineCap = 'round';
   ctx.beginPath();
   let sp = 0;
-  for (let i = 0; i < list.length; i++) {
-    const st = list[i];
-    if (!st || st.got || !Number.isFinite(st.x) || !Number.isFinite(st.y) || starGroup(st) !== group) continue;
-    if (!visX(f, st.x - 20, st.x + 20)) continue;
+  for (const st of stars) {
     const ph = num(st.phase);
     let k;
     if (f.calm) k = group === 'normal' ? 0 : 0.6;
@@ -1354,12 +1393,9 @@ function drawStarGroup(f, list, group, pose) {
   if (sp) ctx.stroke();
 
   // Aura der Risikosterne
-  if (group === 'risk' && !f.lodRisk) {
+  if (group === 'risk') {
     ctx.fillStyle = G(f, 'gold', mkGold);
-    for (let i = 0; i < list.length; i++) {
-      const st = list[i];
-      if (!st || st.got || !Number.isFinite(st.x) || !Number.isFinite(st.y) || starGroup(st) !== group) continue;
-      if (!visX(f, st.x - 20, st.x + 20)) continue;
+    for (const st of stars) {
       starPose(f, st, group, pose);
       ctx.save();
       ctx.translate(pose.x, pose.y);
@@ -1384,8 +1420,6 @@ function drawPowerups(f) {
     drawPowerup(f, u);
   }
 }
-
-const POWER_TYPES = { shield: 1, dash: 1, magnet: 1, feather: 1 };
 
 function drawPowerup(f, u) {
   const { ctx } = f;
