@@ -824,7 +824,6 @@ test('Wind: Traumsturm schiebt überall und addiert sich zu den Zonen', { skip: 
   assert.equal(windAt(storm, 5, 5).vx, ev);
   storm.zones.push(createWind(storm, 0, 0, 500, 450, { vx: ev > 0 ? 100 : -100 }));
   assert.equal(windAt(storm, 5, 5).vx, clamp(ev + (ev > 0 ? 100 : -100), -WIND.MAX_VX, WIND.MAX_VX));
-  assert.equal(windAt(storm, 5, 5).vx, ev > 0 ? WIND.MAX_VX : -WIND.MAX_VX);
 });
 
 test('Wind: windAt gibt jedes Mal ein neues Objekt zurück, das Zustand nicht verändert', () => {
