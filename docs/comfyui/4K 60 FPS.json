@@ -1,0 +1,66 @@
+{
+  "1": {
+    "class_type": "VHS_LoadVideo",
+    "_meta": { "title": "1) Video laden (Stück für Stück)" },
+    "inputs": {
+      "video": "input.mp4",
+      "force_rate": 30,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 30,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    }
+  },
+  "2": {
+    "class_type": "RIFE VFI",
+    "_meta": { "title": "2) 30 -> 60 FPS (RIFE, noch in kleiner Auflösung)" },
+    "inputs": {
+      "ckpt_name": "rife47.pth",
+      "clear_cache_after_n_frames": 10,
+      "multiplier": 2,
+      "fast_mode": true,
+      "ensemble": true,
+      "scale_factor": 1.0,
+      "frames": ["1", 0]
+    }
+  },
+  "3": {
+    "class_type": "UpscaleModelLoader",
+    "_meta": { "title": "3) Upscale-Modell" },
+    "inputs": { "model_name": "RealESRGAN_x2.pth" }
+  },
+  "4": {
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": { "title": "4) Upscale (kachelweise = wenig VRAM)" },
+    "inputs": { "upscale_model": ["3", 0], "image": ["2", 0] }
+  },
+  "5": {
+    "class_type": "ImageScale",
+    "_meta": { "title": "5) Auf exakt 4K (3840x2160)" },
+    "inputs": {
+      "upscale_method": "lanczos",
+      "width": 3840,
+      "height": 2160,
+      "crop": "disabled",
+      "image": ["4", 0]
+    }
+  },
+  "6": {
+    "class_type": "VHS_VideoCombine",
+    "_meta": { "title": "6) Speichern: 4K 60 FPS" },
+    "inputs": {
+      "images": ["5", 0],
+      "frame_rate": 60,
+      "loop_count": 0,
+      "filename_prefix": "4K_60FPS/teil",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 17,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}
