@@ -22,6 +22,7 @@ import { drawBackground } from './game/render/background.js';
 import { drawWorld } from './game/render/world.js';
 import { drawCharacters } from './game/render/characters.js';
 import { drawHud } from './game/render/hud.js';
+import { drawScreenFx } from './game/render/screenfx.js';
 import { drawGameOver, drawPause, drawTitle } from './game/render/screens.js';
 
 const MIN_OVER_TIME = 0.7; // so lange ignoriert der Game Over Bildschirm Tastendrücke
@@ -177,7 +178,10 @@ export function createNimbusGame(container, options = {}) {
       ctx.fillRect(0, 0, W, H);
     }
 
-    if (ui.state !== 'ready') drawHud(ctx, s, ui, view);
+    if (ui.state !== 'ready') {
+      drawScreenFx(ctx, s, ui, view);
+      drawHud(ctx, s, ui, view);
+    }
     if (ui.state === 'ready') drawTitle(ctx, ui, view);
     else if (ui.state === 'paused') drawPause(ctx, ui, view);
     else if (ui.state === 'over') drawGameOver(ctx, s, ui, view);
@@ -208,6 +212,7 @@ export function createNimbusGame(container, options = {}) {
         firstStep = false;
         acc -= STEP;
       }
+      if (s.sfx && s.sfx.length) s.sfx.length = 0; // Tonereignisse: der Ton selbst folgt (game/audio.js)
       if (onStar && s.run.stars > reportedStars) {
         for (; reportedStars < s.run.stars; reportedStars++) onStar();
       }

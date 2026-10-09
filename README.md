@@ -33,7 +33,10 @@ Danach `http://localhost:8080` öffnen.
 | Laufen | `←` `→` oder `A` `D` | linke und rechte Pfeiltaste unten links |
 | Springen | `Leertaste`, `↑` oder `W` | große Taste unten rechts |
 | Doppelsprung | in der Luft noch einmal springen | in der Luft noch einmal tippen |
-| Regenbogen Dash | `Shift`, `X` oder `K` | Dash Taste (erscheint, solange der Dash aktiv ist) |
+| Wolkenstoß (Dash) | `Shift`, `X` oder `K` | Dash Taste |
+| Gleiten | Sprungtaste in der Luft halten | Sprungtaste in der Luft halten |
+| Stampfen | `↓` oder `S` in der Luft | folgt in einer späteren Version |
+| Sternenwurf | `J`, `F`, `Z` oder `C` | folgt in einer späteren Version |
 | Pause | `P` oder `Esc` | Pausetaste oben rechts |
 | Neustart | beliebige Taste | Tippen |
 
@@ -58,6 +61,15 @@ Du hast drei Leben. Punkte gibt es für zurückgelegte Meter, Sterne, besiegte G
 
 **Wenn etwas schiefgeht:** Du wirst zurückgestoßen und bist kurz unverwundbar. Fällst du in einen Abgrund, setzt dich das Spiel auf eine sichere Plattform vor dir, und mindestens zwei Sekunden lang kann dir nichts passieren. Am Ende erfährst du, woran es lag.
 
+## Fähigkeiten
+
+| Fähigkeit | Was sie kann |
+| :--- | :--- |
+| Wolkenstoß | ein schneller Ruck nach vorn, immer verfügbar, einmal pro Luftphase und mit kurzer Abklingzeit. Wer dabei einen Gegner berührt, besiegt ihn. Mit dem Regenbogen Powerup ist er viel kürzer abgekühlt und ohne Luftlimit |
+| Gleiten | in der Luft die Sprungtaste halten, dann sinkt Nimbus langsam. Bis zu 1,2 Sekunden pro Luftphase |
+| Stampfen | in der Luft nach unten drücken: ein Sturzflug mit Schockwelle, die Gegner im Umkreis besiegt |
+| Sternenwurf | zehn gesammelte Sterne laden einen Wurfstern auf, bis zu drei. Er besiegt Gegner aus der Ferne und zerstört Hagel. Combos ab x3 geben ebenfalls einen Wurfstern |
+
 ## Gefahren
 
 | Gefahr | Verhalten | Wie du damit umgehst |
@@ -69,6 +81,11 @@ Du hast drei Leben. Punkte gibt es für zurückgelegte Meter, Sterne, besiegte G
 | Windzone | schiebt dich zur Seite oder hebt dich an | der Wind ist immer schwächer als du, du bleibst Herr der Lage |
 | Regenwolke | der Boden wird rutschig | etwas früher bremsen |
 | Fallender Stern | rieselt langsam vom Himmel | wer mutig ist, holt ihn sich für Extrapunkte |
+| Komet | markiert seine Einschlagstelle mehr als eine Sekunde vorher | aus dem Ring gehen, dann schlägt er ein |
+| Hagel | die Hagelwolke fächert Körner nach unten | zwischen den Körnern hindurch oder mit Stampfen und Wurfstern zerstören |
+| Sprungwolke | schleudert dich hoch hinaus | gut für Abkürzungen und Sternenbögen |
+| Eiswolke | der Boden ist extrem rutschig | früh bremsen, nicht zu spät springen |
+| Blinkwolke | verschwindet im Takt und flackert vorher | rechtzeitig weiterspringen |
 
 ## Gegner
 
@@ -80,6 +97,7 @@ Alle Gegner kannst du von oben besiegen. Jeder zeigt vor seinem Angriff, was er 
 | Hüpfer | zieht sich zusammen, springt dann auf der Stelle, zielt aber nie auf dich |
 | Fliegende Wolke | schwebt in sanften Wellen auch über Abgründen |
 | Sturmwolke | erkennt dich in der Nähe, lädt sich sichtbar auf, stürmt los und braucht danach eine Pause |
+| Hagelwolke | schwebt, zittert vor dem Schuss und fächert Hagelkörner nach unten, zielt nie auf dich |
 
 ## Powerups
 
@@ -89,6 +107,7 @@ Alle Gegner kannst du von oben besiegen. Jeder zeigt vor seinem Angriff, was er 
 | Regenbogen Dash | 8 Sekunden lang kannst du waagerecht dashen und dabei Gegner besiegen |
 | Sternmagnet | 8 Sekunden lang fliegen Sterne in deiner Nähe zu dir |
 | Traumfeder | ein zusätzlicher Luftsprung, bis zu zwei lassen sich aufsparen |
+| Doppelpunkte | 10 Sekunden lang zählt jeder Punkt doppelt |
 
 ## Traumwelten und Traumtore
 
@@ -107,18 +126,19 @@ Ab etwa 400 Metern passiert hin und wieder etwas Besonderes: **Sternschnuppen** 
 
 ## Schwierigkeitskurve
 
-Das Spiel wird nicht einfach schneller. Es führt Neues ein und kombiniert es später.
+Das Spiel wird nicht einfach schneller. Es führt Neues ein, kombiniert es später und zieht dann deutlich an. Die Kurve steigt etwa 80 Prozent steiler als in Version 2.0 und reicht bis zur Stufe Albtraum.
 
 | Strecke | Was dich erwartet |
 | :--- | :--- |
 | 0 bis 250 m | Einschlafen: Plattformen, Sterne, die erste Lücke |
-| 250 bis 500 m | Erste Gegner und Stachelwolken |
-| 500 bis 800 m | Bewegliche Plattformen und Regen |
-| 800 bis 1200 m | Brüchige Plattformen, Hüpfer, Blitze, fallende Sterne |
-| 1200 bis 1700 m | Wind, fliegende Wolken, Sturmwolken |
-| ab 1700 m | Kombinationen aus allem, die Kurve steigt weiter |
+| 250 bis 500 m | Erste Gegner, Stachelwolken und die ersten Powerups |
+| 500 bis 800 m | Bewegliche Plattformen, Regen und Sprungwolken |
+| 800 bis 1200 m | Brüchige Plattformen, Hüpfer, Blitze, fallende Sterne, Eiswolken |
+| 1200 bis 1700 m | Wind, fliegende Wolken, Sturmwolken, Hagelwolken, Blinkwolken |
+| ab 1700 m | Kombinationen aus allem, Kometen, die Kurve steigt weiter bis 3200 m |
+| ab 3200 m | Albtraum: die dichtesten Kombinationen |
 
-Zwischendurch gibt es immer wieder ruhige Abschnitte zum Durchatmen. Insgesamt stecken 43 Abschnitte im Spiel. Der Generator wählt sie nach Strecke und Schwierigkeit aus und prüft jede Verbindung auf Machbarkeit.
+Je weiter du kommst, desto schneller werden Gegner, Plattformen und Blitzabstände. Die Vorwarnzeiten bleiben immer gleich lang, damit nichts unfair wird. Zwischendurch gibt es ruhige Abschnitte zum Durchatmen. Insgesamt stecken 85 Abschnitte im Spiel. Der Generator wählt sie nach Strecke und Schwierigkeit aus und prüft jede Verbindung auf Machbarkeit.
 
 ## Bilder
 
@@ -183,7 +203,7 @@ Traum/
 ├── game/                Spiellogik und Darstellung
 │   ├── sim.js           ein Simulationsschritt, ohne DOM und deterministisch
 │   ├── generator.js     Abschnitte auswählen, verbinden, prüfen
-│   ├── chunks/          die 43 Abschnitte
+│   ├── chunks/          die 85 Abschnitte
 │   ├── player.js, enemies.js, obstacles.js, platforms.js, collectibles.js, gates.js, events.js
 │   └── render/          Hintergrund, Welt, Figuren, HUD, Bildschirme
 ├── tests/               Tests ohne Browser, dazu ein spielender Bot
