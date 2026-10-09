@@ -132,7 +132,7 @@
         "Node name for S&R": "UpscaleModelLoader"
       },
       "widgets_values": [
-        "RealESRGAN_x2.pth"
+        "RealESRGAN_x2plus.pth"
       ]
     },
     {

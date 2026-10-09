@@ -1,12 +1,12 @@
 # ComfyUI Workflow: 4K 60 FPS (speicherschonend)
 
-Datei: `4K 60 FPS.json` – in ComfyUI per Drag & Drop ins Fenster ziehen (oder Workflow → Öffnen),
-dann **Workflow → Speichern unter…** und `4K 60 FPS` nennen.
+Datei: `4K 60FPS 1.0.json` – in ComfyUI per Drag & Drop ins Fenster ziehen (oder Workflow → Öffnen),
+dann **Workflow → Speichern unter…** und `4K 60FPS 1.0` nennen.
 
 ## Benötigte Custom Nodes (ComfyUI-Manager → "Install Missing Custom Nodes")
 - ComfyUI-VideoHelperSuite (Video laden/speichern)
 - ComfyUI-Frame-Interpolation (RIFE; Modell `rife47.pth` lädt sich selbst)
-- Upscale-Modell `RealESRGAN_x2.pth` in `models/upscale_models/`
+- Upscale-Modell `RealESRGAN_x2plus.pth` in `models/upscale_models/`
   (für 720p oder kleiner lieber ein 4x-Modell, z. B. `RealESRGAN_x4plus.pth`)
 
 ## Warum es wenig Speicher braucht
@@ -37,3 +37,8 @@ z. B. bei 16 GB: `python main.py --lowvram --reserve-vram 8`
   Bei 60-FPS-Quellen: `force_rate` 0 und RIFE `multiplier` 1 (nur Upscale).
 - Knoten 5 streckt auf 3840x2160; bei nicht-16:9-Videos `crop` auf `center` stellen.
 - An den Stückgrenzen kann es minimal ruckeln (RIFE sieht dort das Nachbarstück nicht).
+
+## Automatische Installation (Windows + NVIDIA)
+`install.ps1` per Rechtsklick → "Mit PowerShell ausführen". Es lädt ComfyUI, beide
+Nodes, das Upscale-Modell und legt den Workflow `4K 60FPS 1.0` ab. Danach `start-4k.bat`
+(Admin für das 70-%-Strom-Limit): Priorität "unter normal", 35 % VRAM bleiben frei.
