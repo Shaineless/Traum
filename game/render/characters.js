@@ -1,7 +1,8 @@
-// Figuren: Gegner, Spieler Nimbus (mit Effekten) und Partikel.
+// Figuren: Gegner (auch die Hagelwolke), Spieler Nimbus (mit Posen und Effekten), Wurfsterne und Partikel.
 //
-// Reihenfolge von hinten nach vorn: Gegner, Schatten und Auren des Spielers, Regenbogenspur,
-// Nimbus, Federn, Schildblase, Partikel, Debug Rechtecke.
+// Reihenfolge von hinten nach vorn: Gegner, Schatten und Auren des Spielers, Dash Spur (Basis weiß,
+// Regenbogen bunt), Nimbus (normal, gleitend, im Sturzflug), Orbit Sterne, Federn, Schildblase,
+// Wurfsterne, Partikel, Debug Rechtecke.
 // Alles ist eine reine Funktion von s und view. Animation kommt aus view.time (Nimbus) und
 // e.anim (Gegner). Es gibt keinen Zustand außerhalb von s und view.
 //
@@ -11,7 +12,7 @@
 // (Mischung 'lighter') ist pro Frame begrenzt. Bei view.reduceMotion bleiben alle Formen
 // erhalten, aber ohne Blinken, Funkeln und mit sanfterer Bewegung.
 
-import { H as H0, W as W0 } from '../constants.js';
+import { ABILITY, ENEMY, H as H0, W as W0 } from '../constants.js';
 
 const TAU = Math.PI * 2;
 const MARGIN = 120; // Figuren im Bereich minus MARGIN bis W plus MARGIN werden gezeichnet
@@ -23,6 +24,10 @@ const DETAIL_PARTICLES = 100; // so viele (die neuesten) Partikel bekommen alle 
 const HALO_MAX = 32; // höchstens so viele Leuchtkränze pro Frame
 const HALO_MAX_CALM = 12;
 const INVULN_HZ = 10; // Blinken bei Unverwundbarkeit
+const SHOT = ABILITY.SHOT;
+const AMMO_MAX = ABILITY.AMMO.MAX;
+const RECOIL_TIME = 0.18; // so lange federt Nimbus nach einem Wurf zurück
+const MAX_SHOTS_DRAWN = 8;
 
 // ---------- Zahlen ----------
 
@@ -67,6 +72,7 @@ const LOOK = {
   jumper: { top: '#ad82ec', mid: '#7e52cb', bot: '#52309a', edge: '#2b1760', y: 38 },
   flyer: { top: '#c3cde8', mid: '#9ca9cd', bot: '#7480a6', edge: '#38415f', y: 34 },
   charger: { top: '#8e6672', mid: '#613f4e', bot: '#33222d', edge: '#1b0f16', y: 42 },
+  hailcloud: { top: '#dbe8f6', mid: '#9db0cc', bot: '#5e6d8c', edge: '#243049', y: 34 },
 };
 
 // ---------- Wolkenform: Liste von (cx, cy, rx, ry), Ursprung ist die Mitte der Unterkante ----------
@@ -133,6 +139,24 @@ const mkShield = (ctx) => unitRadial(ctx, [0, 'rgba(143,233,255,0.03)', 0.62, 'r
 const mkGold = (ctx) => unitRadial(ctx, [0, 'rgba(255,214,90,0.5)', 0.5, 'rgba(255,200,70,0.2)', 1, 'rgba(255,200,70,0)']);
 const mkRedGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,90,70,0.75)', 0.5, 'rgba(255,70,60,0.34)', 1, 'rgba(255,60,50,0)']);
 const mkVioletGlow = (ctx) => unitRadial(ctx, [0, 'rgba(222,160,255,0.8)', 0.5, 'rgba(190,120,255,0.34)', 1, 'rgba(190,120,255,0)']);
+const mkIceGlow = (ctx) => unitRadial(ctx, [0, 'rgba(206,246,255,0.9)', 0.5, 'rgba(150,218,255,0.36)', 1, 'rgba(150,218,255,0)']);
+const mkSlamGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,246,214,0.62)', 0.5, 'rgba(255,226,150,0.24)', 1, 'rgba(255,226,150,0)']);
+const mkWarmGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,170,110,0.55)', 0.5, 'rgba(255,140,170,0.22)', 1, 'rgba(255,140,170,0)']);
+const mkDoubleGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,196,110,0.4)', 0.5, 'rgba(255,184,107,0.16)', 1, 'rgba(255,184,107,0)']);
+const mkShotGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,240,170,0.85)', 0.45, 'rgba(255,214,90,0.34)', 1, 'rgba(255,214,90,0)']);
+
+// Schweife: von links (0) nach rechts (1) ausblendend, werden mit scale auf die Länge gezogen
+function tailGradient(ctx, rgb) {
+  const g = ctx.createLinearGradient(0, 0, 1, 0);
+  g.addColorStop(0, `rgba(${rgb},0.9)`);
+  g.addColorStop(0.5, `rgba(${rgb},0.38)`);
+  g.addColorStop(1, `rgba(${rgb},0)`);
+  return g;
+}
+const mkShotTail = (ctx) => tailGradient(ctx, '255,214,96');
+const mkShotCore = (ctx) => tailGradient(ctx, '255,252,232');
+const mkWhiteTail = (ctx) => tailGradient(ctx, '255,255,255');
+const mkWarmTail = (ctx) => tailGradient(ctx, '255,160,120');
 
 function bodyGradient(f, kind) {
   const L = LOOK[kind];
@@ -224,6 +248,17 @@ function sparkle(ctx, x, y, r, rot) {
   }
 }
 
+// Fünfzackiger Stern (Wurfstern, Orbit Sterne), gedreht um rot
+function star5(ctx, x, y, R, r, rot) {
+  for (let i = 0; i < 10; i++) {
+    const a = rot - Math.PI / 2 + i * (Math.PI / 5);
+    const d = i % 2 ? r : R;
+    if (i) ctx.lineTo(x + Math.cos(a) * d, y + Math.sin(a) * d);
+    else ctx.moveTo(x + Math.cos(a) * d, y + Math.sin(a) * d);
+  }
+  ctx.closePath();
+}
+
 // Blitz als Zickzack Fläche, Ursprung oben links, Größe etwa 7 mal 13
 function bolt(ctx, x, y, k) {
   ctx.moveTo(x + 4 * k, y);
@@ -297,11 +332,13 @@ function blinkAt(time) {
   return ph < 0.16 ? Math.sin((ph / 0.16) * Math.PI) : 0;
 }
 
-function nimbusFace(f, p, off, dead) {
+// pose: '' | 'slam' (Sturzflug: entschlossen, Mund offen) | 'glide' (Gleiten: breites Lächeln)
+function nimbusFace(f, p, off, dead, pose) {
   const ctx = f.ctx;
   const blink = f.calm ? blinkAt(f.time) * 0.8 : blinkAt(f.time);
   const stun = num(p.stun) > 0;
-  const dashing = num(p.dash && p.dash.t) > 0;
+  const slam = pose === 'slam';
+  const dashing = num(p.dash && p.dash.t) > 0 || slam;
   const rising = !p.onGround && num(p.vy) < -140;
   const ex = 8.2;
   const ey = -19.5;
@@ -359,6 +396,16 @@ function nimbusFace(f, p, off, dead) {
       for (let k = 0; k < 2; k++) disc(ctx, (k ? ex : -ex) + fx + 0.9, ey - 1.3, 1.05);
       ctx.fill();
     }
+    if (slam) {
+      // entschlossene Brauen, nach innen geneigt
+      ctx.lineWidth = 1.7;
+      ctx.beginPath();
+      ctx.moveTo(-ex - fx * 0.3 - 4, ey - 6.6);
+      ctx.lineTo(-ex - fx * 0.3 + 3.4, ey - 4.4);
+      ctx.moveTo(ex + fx * 0.3 + 4, ey - 6.6);
+      ctx.lineTo(ex + fx * 0.3 - 3.4, ey - 4.4);
+      ctx.stroke();
+    }
   }
 
   // Mund
@@ -369,16 +416,16 @@ function nimbusFace(f, p, off, dead) {
     ctx.moveTo(mx - 2.6, -11.4);
     ctx.quadraticCurveTo(mx, -13.6, mx + 2.6, -11.4);
     ctx.stroke();
-  } else if (stun || rising) {
+  } else if (stun || rising || slam) {
     ctx.fillStyle = C.mouth;
     ctx.beginPath();
     ctx.moveTo(mx + 1.9, -12.2);
-    ctx.ellipse(mx, -12.2, 1.9, stun ? 2.6 : 2.2, 0, 0, TAU);
+    ctx.ellipse(mx, -12.2, slam ? 2.4 : 1.9, stun ? 2.6 : slam ? 3 : 2.2, 0, 0, TAU);
     ctx.fill();
   } else {
     ctx.lineWidth = 1.6;
     ctx.beginPath();
-    const w = dashing ? 3.6 : 2.8;
+    const w = pose === 'glide' ? 3.8 : dashing ? 3.6 : 2.8;
     ctx.moveTo(mx - w, -13.4);
     ctx.quadraticCurveTo(mx, -10.3, mx + w, -13.4);
     ctx.stroke();
@@ -534,6 +581,147 @@ function powerAlpha(f, t) {
   return f.calm ? 0.6 + 0.4 * (t / 1.5) : 0.35 + 0.65 * (Math.sin(f.time * 16) * 0.5 + 0.5) * Math.min(1, t / 0.4);
 }
 
+// Basis Dash: kurzer weißer Schweif hinter Nimbus (back ist die Richtung nach hinten)
+const WHITE_LAYERS = [[12, 0.32], [7, 0.55], [3, 0.9]];
+function whiteTrail(f, cx, feet, back, trail, tail) {
+  const ctx = f.ctx;
+  const len = 26 + 54 * trail;
+  const a = clamp01(trail * 1.1) * tail;
+  ctx.save();
+  ctx.translate(cx + back * 12, feet - 17);
+  ctx.scale(back * len, 1);
+  ctx.fillStyle = G(f, 'whiteTail', mkWhiteTail);
+  for (let i = 0; i < WHITE_LAYERS.length; i++) {
+    ctx.globalAlpha = a * WHITE_LAYERS[i][1];
+    ctx.beginPath();
+    ctx.moveTo(0, -WHITE_LAYERS[i][0]);
+    ctx.lineTo(1, 0);
+    ctx.lineTo(0, WHITE_LAYERS[i][0]);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Doppelpunkte: warmer Schein und goldene Sternchen, die um Nimbus aufsteigen
+function doubleAura(f, cx, feet, midY, alpha) {
+  const ctx = f.ctx;
+  glow(ctx, G(f, 'dbl', mkDoubleGlow), cx, midY, 52, 46, 0.85 * alpha);
+  const rate = f.calm ? 0.25 : 0.65;
+  ctx.fillStyle = '#ffd24a';
+  for (let i = 0; i < 7; i++) {
+    const ph = frac(f.time * rate + i / 7);
+    const k = Math.sin(ph * Math.PI);
+    ctx.globalAlpha = clamp01(k * 1.4 * alpha);
+    ctx.beginPath();
+    sparkle(ctx, cx + Math.sin(i * 2.4 + ph * 3) * (19 + 10 * (i % 2)), feet - 4 - ph * 58, 3.4 + 3.4 * k, ph * 3);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Combo ab x3: warmer Schein, ein Funkenschweif und ein kurzer glühender Schwanz, alles wächst mit der Combo
+function comboAura(f, cx, midY, back, count, alpha) {
+  const ctx = f.ctx;
+  const ci = clamp01((count - 2) / 4);
+  glow(ctx, G(f, 'warm', mkWarmGlow), cx, midY, 54 + 10 * ci, 46 + 8 * ci, (0.4 + 0.5 * ci) * alpha);
+  // glühender Schwanz hinter der Wolke
+  ctx.save();
+  ctx.translate(cx + back * 16, midY + 2);
+  ctx.scale(back * (30 + 46 * ci), 7 + 5 * ci);
+  ctx.beginPath();
+  ctx.moveTo(0, -1);
+  ctx.lineTo(1, 0);
+  ctx.lineTo(0, 1);
+  ctx.closePath();
+  ctx.globalAlpha = (0.3 + 0.35 * ci) * alpha;
+  ctx.fillStyle = G(f, 'warmTail', mkWarmTail);
+  ctx.fill();
+  ctx.restore();
+  const n = 4 + Math.floor(ci * 4);
+  const rate = f.calm ? 0.5 : 1.7;
+  ctx.globalAlpha = alpha;
+  for (let g = 0; g < 2; g++) {
+    ctx.fillStyle = g ? '#ff9ad5' : '#ffd24a';
+    ctx.beginPath();
+    for (let i = g; i < n; i += 2) {
+      const ph = frac(f.time * rate + i * 0.173);
+      const wob = f.calm ? 0 : Math.sin(f.time * 7 + i * 2.7) * 6 * (0.4 + ph);
+      sparkle(ctx, cx + back * (14 + ph * (36 + 26 * ci)), midY - 10 + frac(i * 0.37) * 22 + wob, (1 - ph) * 5.2 + 1.4, ph * 4);
+    }
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Wurfsterne als Orbit: die Sterne hinter der Wolke sind kleiner und blasser (front false), die davor größer
+function ammoStars(f, cx, midY, ammo, front, alpha) {
+  const ctx = f.ctx;
+  const spin = f.time * (f.calm ? 0.5 : 1.8);
+  let any = false;
+  ctx.fillStyle = '#ffd966';
+  ctx.strokeStyle = '#d99a1c';
+  ctx.lineWidth = 1.1;
+  ctx.globalAlpha = (front ? 1 : 0.85) * alpha;
+  ctx.beginPath();
+  for (let i = 0; i < ammo; i++) {
+    const a = spin + (i * TAU) / ammo;
+    const sn = Math.sin(a);
+    if ((sn >= 0) !== front) continue;
+    star5(ctx, cx + Math.cos(a) * 38, midY - 4 + sn * 21, front ? 5.6 : 4.4, front ? 2.4 : 1.9, a * 0.7);
+    any = true;
+  }
+  if (any) {
+    ctx.stroke();
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Gleiten: drei weiche Wolkenpuffer, die hinter Nimbus zurückbleiben und verblassen
+function glidePuffs(f, cx, feet, face, k, alpha) {
+  const grad = puffGradient(f, '#ffffff');
+  const rate = f.calm ? 0.45 : 1.3;
+  const n = f.calm ? 2 : 3;
+  for (let i = 0; i < n; i++) {
+    const ph = frac(f.time * rate + i / n);
+    const r = 5 + ph * 8;
+    glow(f.ctx, grad, cx - face * (24 + ph * 44), feet - 13 - (i % 2) * 5 - ph * 5, r, r * 0.8, (1 - ph) * 0.85 * k * alpha);
+  }
+}
+
+// Sturzflug: Geschwindigkeitslinien über dem Kopf und ein heller Schein
+function slamEffect(f, cx, midY, topY, k, alpha) {
+  const ctx = f.ctx;
+  glow(ctx, G(f, 'slamGlow', mkSlamGlow), cx, midY - 6, 50, 58, 0.85 * k * alpha);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 2.2;
+  ctx.globalAlpha = 0.75 * k * alpha;
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const flick = f.calm ? 0.8 : 0.65 + 0.35 * frac(f.time * 11 + i * 0.37);
+    const len = (i === 2 ? 58 : i % 2 ? 30 : 44) * flick * k;
+    const y0 = topY - (i === 2 ? 4 : 9);
+    ctx.moveTo(cx + (i - 2) * 9.5, y0);
+    ctx.lineTo(cx + (i - 2) * 9.5, y0 - len);
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// Armpuffer beim Gleiten: zwei flache Wolkenzipfel links und rechts, flattern leicht
+function glideArms(ctx, k, t, calm) {
+  for (let i = 0; i < 2; i++) {
+    const side = i ? 1 : -1;
+    const flap = calm ? 0 : Math.sin(t * 7 + i * 1.7) * 1.6;
+    const cx = side * (25 + 7 * k);
+    const cy = -16 - flap;
+    const rx = 5 + 5 * k;
+    ctx.moveTo(cx + rx, cy);
+    ctx.ellipse(cx, cy, rx, 3 + 2.4 * k, side * -0.12, 0, TAU);
+  }
+}
+
 function drawPlayer(f) {
   const { ctx, s } = f;
   const p = s.player;
@@ -544,11 +732,21 @@ function drawPlayer(f) {
   const feet = num(p.y) + h + SINK;
   if (cx < -MARGIN - 40 || cx > f.W + MARGIN + 40 || feet < -160 || feet > f.H + 260) return;
   const dead = !!p.dead;
-  const power = p.power || {};
-  const dashing = num(p.dash && p.dash.t) > 0;
+  const power = p.power && typeof p.power === 'object' ? p.power : {};
+  const dashObj = p.dash && typeof p.dash === 'object' ? p.dash : {};
+  const dashing = num(dashObj.t) > 0;
   const face = p.face < 0 ? -1 : 1;
   const wet = clamp01(num(p.wet));
   const deathT = clamp(num(s.deathT), 0, 60);
+
+  // Posen: Sturzflug, Gleiten und der Rückstoß nach einem Wurf
+  const slamK = !dead && p.slam && p.slam.active ? smooth(0.35 + num(p.slam.t) / 0.08) : 0;
+  const glideK = !dead && !slamK && !dashing && p.glide ? smooth(0.15 + num(p.glideT) / 0.1) : 0;
+  const since = SHOT.COOLDOWN - num(p.throwCd);
+  const recoil = !dead && num(p.throwCd) > 0 && since >= 0 && since < RECOIL_TIME ? (1 - since / RECOIL_TIME) ** 2 * (f.calm ? 0.5 : 1) : 0;
+  const pose = slamK ? 'slam' : glideK ? 'glide' : '';
+  const ammo = clamp(Math.floor(num(p.ammo)), 0, AMMO_MAX);
+  const comboN = s.combo && typeof s.combo === 'object' ? num(s.combo.count) : 0;
 
   // Gesamte Deckkraft: Sterben blendet aus, Unverwundbarkeit blinkt
   let alpha = 1;
@@ -560,7 +758,12 @@ function drawPlayer(f) {
   let sy = clamp(num(p.squashY, 1), 0.5, 1.7);
   if (p.onGround && !dead && !f.calm) sy *= 1 + Math.sin(f.time * 2.4) * 0.012; // ruhiges Atmen
   if (dashing) { sx *= 1.16; sy *= 0.9; }
-  const lean = dead ? 0 : clamp(num(p.vx) / 300, -1, 1) * 0.07 * (f.calm ? 0.5 : 1);
+  if (glideK) { sx *= 1 + 0.17 * glideK; sy *= 1 - 0.15 * glideK; }
+  if (slamK) { sx *= 1 - 0.14 * slamK; sy *= 1 + 0.14 * slamK; }
+  if (recoil) { sx *= 1 - 0.1 * recoil; sy *= 1 + 0.05 * recoil; }
+  let lean = dead ? 0 : clamp(num(p.vx) / 300, -1, 1) * 0.07 * (f.calm ? 0.5 : 1);
+  if (slamK) lean *= 1 - slamK;
+  lean += face * (0.1 * glideK - 0.13 * recoil);
   const off = face * 2.6;
 
   const midY = feet - 20; // Mitte der Wolke
@@ -581,15 +784,28 @@ function drawPlayer(f) {
     if (dAlpha > 0 && !dashing) dashShimmer(f, cx, midY, dAlpha * alpha);
     const mAlpha = powerAlpha(f, num(power.magnetT));
     if (mAlpha > 0) magnetAura(f, cx, midY, mAlpha * alpha);
+    const xAlpha = powerAlpha(f, num(power.double));
+    if (xAlpha > 0) doubleAura(f, cx, feet, midY, xAlpha * alpha);
+    const vx = num(p.vx);
+    const back = Math.abs(vx) > 20 ? -Math.sign(vx) : -face;
+    if (comboN >= 3) comboAura(f, cx, midY, back, comboN, alpha);
+    if (ammo > 0) ammoStars(f, cx, midY, ammo, false, alpha);
     const trail = clamp01(num(p.trail));
-    if (trail > 0.02 || dashing) dashTrail(f, cx, feet, -(num(p.dash && p.dash.dir) < 0 ? -1 : 1), dashing ? Math.max(trail, 0.5) : trail, alpha);
+    if (trail > 0.02 || dashing) {
+      const behind = -(num(dashObj.dir) < 0 ? -1 : 1);
+      const amount = dashing ? Math.max(trail, 0.5) : trail;
+      if (dashObj.rainbow) dashTrail(f, cx, feet, behind, amount, alpha);
+      else whiteTrail(f, cx, feet, behind, amount, alpha);
+    }
+    if (slamK) slamEffect(f, cx, midY, topY, slamK, alpha);
+    if (glideK) glidePuffs(f, cx, feet, face, glideK, alpha);
   }
 
   // Weicher Schein hinter der Wolke
   glow(ctx, G(f, 'nGlow', mkNimbusGlow), cx, midY, 46 * sx, 38 * sy, 0.8 * alpha);
 
   // Körper
-  ctx.translate(cx, feet);
+  ctx.translate(cx - face * 3.5 * recoil, feet);
   if (dead) {
     const spin = Math.min(deathT, 3) * 5.2 * -face + lean;
     ctx.translate(0, -18);
@@ -605,15 +821,18 @@ function drawPlayer(f) {
   ctx.lineWidth = 2.2;
   ctx.beginPath();
   lobes(ctx, NIMBUS, f.time, f.calm ? 0.25 : 0.8, 0);
+  if (glideK) glideArms(ctx, glideK, f.time, f.calm);
   if (alpha >= 0.98) ctx.stroke(); // bei Durchsicht würden sich die Teilränder abzeichnen
   ctx.fill();
-  nimbusFace(f, p, off, dead);
+  nimbusFace(f, p, off, dead, pose);
   if (wet > 0.3 && !dead) nimbusWet(f, wet);
   ctx.restore();
 
   if (!dead) {
     ctx.save();
     ctx.globalAlpha = alpha;
+    if (ammo > 0) ammoStars(f, cx, midY, ammo, true, alpha);
+    if (recoil > 0.15) throwFlash(f, cx + face * 30, midY - 5, recoil, alpha);
     const feathers = Math.min(2, Math.floor(num(power.feather)));
     if (feathers > 0) nimbusFeathers(f, feathers, cx, topY);
     if (power.shield) {
@@ -622,6 +841,18 @@ function drawPlayer(f) {
     }
     ctx.restore();
   }
+}
+
+// Kurzes Aufblitzen an der Hand beim Wurf
+function throwFlash(f, x, y, k, alpha) {
+  const ctx = f.ctx;
+  glow(ctx, G(f, 'shotGlow', mkShotGlow), x, y, 9 + 12 * k, 9 + 12 * k, clamp01(k * 1.6) * alpha);
+  ctx.globalAlpha = clamp01(k * 2.2) * alpha;
+  ctx.fillStyle = '#fffbe6';
+  ctx.beginPath();
+  sparkle(ctx, x, y, 4 + 7 * k, k * 2);
+  ctx.fill();
+  ctx.globalAlpha = alpha;
 }
 
 // ============================================================
@@ -838,6 +1069,152 @@ function drawCharger(f, e, a, dead, flash) {
   ctx.restore();
 }
 
+// Eisbrocken der Hagelwolke ohne Mündung (lokale Koordinaten, Ursprung Mitte der Unterkante)
+function hailBody(ctx) {
+  ctx.moveTo(-21.5, -11);
+  ctx.lineTo(-24, -19.5);
+  ctx.lineTo(-17, -28);
+  ctx.lineTo(-6, -31);
+  ctx.lineTo(8, -30.5);
+  ctx.lineTo(18, -27.5);
+  ctx.lineTo(24, -19);
+  ctx.lineTo(21, -10.5);
+  ctx.lineTo(12, -5);
+  ctx.lineTo(-11, -5);
+  ctx.closePath();
+}
+
+// Schneehaube als Reihe weicher Kuppen mit drei Tropfkanten
+const SNOW_CAP = [-14, -27, 8.5, 5.2, -3, -30.5, 9.5, 5.8, 9, -29.5, 9, 5.4, 17, -25.5, 6.6, 4.6, -19, -22.5, 3.4, 3.4, 15.5, -21.5, 2.8, 3.2];
+
+// Hagelwolke: grauer Eisbrocken mit Schneehaube und Mündung nach unten. Vor dem Schuss zittert sie (e.shakeX),
+// die Mündung glüht eisblau und die drei Hagelkörner des Fächers zeigen ihre Richtung.
+function drawHailcloud(f, e, a, dead, flash) {
+  const ctx = f.ctx;
+  const k = f.calm ? 0.4 : 1;
+  const def = ENEMY.HAILCLOUD;
+  const tele = dead > 0 ? 0 : clamp01(num(e.telegraph));
+  const eased = smooth(tele);
+  ctx.save();
+  if (tele > 0) glow(ctx, G(f, 'iceGlow', mkIceGlow), 0, -16, 38 + eased * 12, 32 + eased * 12, 0.22 + 0.7 * eased);
+  ctx.translate(0, Math.sin(a * 3) * 0.8 * k);
+  if (tele > 0 && !f.calm) ctx.rotate(Math.sin(a * 43) * 0.035 * tele);
+
+  // Mündung (ragt unten aus dem Brocken)
+  ctx.fillStyle = '#394561';
+  ctx.strokeStyle = LOOK.hailcloud.edge;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-8, -9);
+  ctx.lineTo(8, -9);
+  ctx.lineTo(6.8, -0.4);
+  ctx.lineTo(-6.8, -0.4);
+  ctx.closePath();
+  if (f.edge) ctx.stroke();
+  ctx.fill();
+  ctx.fillStyle = '#10162a';
+  ctx.beginPath();
+  ctx.ellipse(0, -0.4, 6.4, 2 + eased * 1.2, 0, 0, TAU);
+  ctx.fill();
+  if (tele > 0) {
+    ctx.fillStyle = `rgba(214,246,255,${(0.35 + 0.6 * eased).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.ellipse(0, -0.4, 4.6, 1.2 + eased * 0.9, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  // Körper
+  ctx.fillStyle = bodyGradient(f, 'hailcloud');
+  ctx.strokeStyle = LOOK.hailcloud.edge;
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  hailBody(ctx);
+  if (f.edge) ctx.stroke();
+  ctx.fill();
+  // Facetten: helle links oben, dunkle rechts unten, ein Riss
+  ctx.fillStyle = 'rgba(246,251,255,0.3)'; // nicht reinweiß: reines Weiß ist dem Aufblitzen (flash) vorbehalten
+  ctx.beginPath();
+  ctx.moveTo(-21.5, -11);
+  ctx.lineTo(-24, -19.5);
+  ctx.lineTo(-17, -28);
+  ctx.lineTo(-9, -21);
+  ctx.lineTo(-13, -11.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = 'rgba(28,42,80,0.26)';
+  ctx.beginPath();
+  ctx.moveTo(24, -19);
+  ctx.lineTo(21, -10.5);
+  ctx.lineTo(12, -5);
+  ctx.lineTo(3, -6.5);
+  ctx.lineTo(13, -15);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(36,48,73,0.38)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(17, -22);
+  ctx.lineTo(13.5, -17.5);
+  ctx.lineTo(16, -14);
+  ctx.moveTo(-6, -7);
+  ctx.lineTo(-3.5, -10);
+  ctx.stroke();
+
+  // Schneehaube
+  ctx.fillStyle = '#f6fbff';
+  ctx.strokeStyle = 'rgba(104,132,176,0.95)';
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  for (let i = 0; i < SNOW_CAP.length; i += 4) {
+    ctx.moveTo(SNOW_CAP[i] + SNOW_CAP[i + 2], SNOW_CAP[i + 1]);
+    ctx.ellipse(SNOW_CAP[i], SNOW_CAP[i + 1], SNOW_CAP[i + 2], SNOW_CAP[i + 3], 0, 0, TAU);
+  }
+  if (f.edge) ctx.stroke();
+  ctx.fill();
+
+  if (dead > 0) crossEyes(ctx, 6.6, -15, 2.7, '#ffffff', 1.9);
+  else angryEyes(f, 6.6, -15, 4.2, 4.6, 0.9 - tele * 1.4, 0.9, 1, '#0c1a33');
+
+  if (flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${clamp01(flash).toFixed(3)})`;
+    ctx.beginPath();
+    hailBody(ctx);
+    ctx.fill();
+  }
+
+  if (tele > 0.02) {
+    // Vorschau des Fächers: Strahlen mit den Hagelkörnern an den Spitzen
+    const n = Math.max(1, Math.floor(def.balls) || 1);
+    const reach = 11 + 24 * eased;
+    ctx.strokeStyle = `rgba(214,244,255,${(0.2 + 0.5 * eased).toFixed(3)})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const ang = n > 1 ? -def.spread + (2 * def.spread * i) / (n - 1) : 0;
+      ctx.moveTo(Math.sin(ang) * 6, -0.4 + Math.cos(ang) * 2);
+      ctx.lineTo(Math.sin(ang) * reach, -0.4 + Math.cos(ang) * reach);
+    }
+    ctx.stroke();
+    ctx.fillStyle = `rgba(240,251,255,${(0.45 + 0.5 * eased).toFixed(3)})`;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const ang = n > 1 ? -def.spread + (2 * def.spread * i) / (n - 1) : 0;
+      disc(ctx, Math.sin(ang) * reach, -0.4 + Math.cos(ang) * reach, 2 + eased * 1.3);
+    }
+    ctx.fill();
+  } else if (!f.calm && dead <= 0) {
+    // dezent: zwei Schneeflocken fallen unter dem Brocken
+    ctx.fillStyle = 'rgba(244,250,255,0.8)';
+    ctx.beginPath();
+    for (let i = 0; i < 2; i++) {
+      const ph = frac(a * 0.5 + i * 0.5);
+      disc(ctx, (i ? 14 : -14) + Math.sin(a * 2 + i * 3) * 2, -4 + ph * 22, 1.5 * (1 - ph * 0.5));
+    }
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 // Gelbes Ausrufezeichen über dem Charger beim Aufladen (nicht gespiegelt)
 function drawWarning(f, cx, topY, tele) {
   const ctx = f.ctx;
@@ -867,30 +1244,104 @@ function drawEnemy(f, e) {
   const ctx = f.ctx;
   const w = clamp(num(e.w, 40), 4, 200);
   const h = clamp(num(e.h, 30), 4, 200);
-  const sx = num(e.x) + w / 2 - f.cam + (e.kind === 'charger' ? num(e.shakeX) : 0);
+  const shaky = e.kind === 'charger' || e.kind === 'hailcloud';
+  const sx = num(e.x) + w / 2 - f.cam + (shaky ? num(e.shakeX) * (f.calm ? 0.35 : 1) : 0);
   const by = num(e.y) + h;
   if (sx < -MARGIN - 30 || sx > f.W + MARGIN + 30 || by < -80 || by > f.H + 160) return;
   const a = Number.isFinite(e.anim) ? e.anim : f.time;
   const deadK = num(e.dead) > 0 ? clamp01(e.dead / DEAD_TIME) : 0;
   const ease = 1 - (1 - deadK) * (1 - deadK);
   const dir = e.dir < 0 ? -1 : 1;
-  const flash = clamp01(num(e.flash) * 4) * 0.85;
-  if (e.kind !== 'walker' && e.kind !== 'jumper' && e.kind !== 'flyer' && e.kind !== 'charger') return;
+  // Treffer: weißes Aufblitzen (e.flash) und beim Besiegen ein kurzes Aufleuchten, bevor die Wolke schrumpft
+  const hitFlash = deadK > 0 && deadK < 0.5 ? (1 - deadK * 2) * 0.9 : 0;
+  const flash = Math.max(clamp01(num(e.flash) * 4) * 0.85, hitFlash);
+  if (e.kind !== 'walker' && e.kind !== 'jumper' && e.kind !== 'flyer' && e.kind !== 'charger' && e.kind !== 'hailcloud') return;
   if (deadK >= 1) return; // schon ganz durchsichtig
 
   ctx.save();
   ctx.translate(sx, by);
   ctx.globalAlpha = 1 - deadK * deadK;
   f.edge = deadK < 0.15;
-  if (e.kind !== 'flyer') shadow(f, w * 0.48);
+  if (e.kind !== 'flyer' && e.kind !== 'hailcloud') shadow(f, w * 0.48);
   ctx.scale(dir * (1 + 0.4 * ease), Math.max(0.1, 1 - 0.88 * ease));
   if (e.kind === 'walker') drawWalker(f, e, a, deadK, flash);
   else if (e.kind === 'jumper') drawJumper(f, e, a, deadK, flash);
   else if (e.kind === 'flyer') drawFlyer(f, e, a, deadK, flash);
+  else if (e.kind === 'hailcloud') drawHailcloud(f, e, a, deadK, flash);
   else drawCharger(f, e, a, deadK, flash);
   ctx.restore();
 
   if (e.kind === 'charger' && e.state !== 'dash' && !deadK && num(e.telegraph) > 0.02) drawWarning(f, sx, by - 50, clamp01(num(e.telegraph)));
+}
+
+// ============================================================
+// Wurfsterne
+// ============================================================
+
+// Leuchtender fünfzackiger Stern mit Schweif. Der Schweif liegt entgegen der Flugrichtung.
+function drawShot(f, sh) {
+  const ctx = f.ctx;
+  const w = clamp(num(sh.w, SHOT.W), 4, 80);
+  const h = clamp(num(sh.h, SHOT.H), 4, 80);
+  const cx = num(sh.x) + w / 2 - f.cam;
+  const cy = num(sh.y) + h / 2;
+  if (cx < -MARGIN - 60 || cx > f.W + MARGIN + 60 || cy < -60 || cy > f.H + 60) return;
+  const dir = num(sh.vx) < 0 ? -1 : 1;
+  const r = Math.min(w, h) / 2;
+  const anim = num(sh.anim);
+  const spin = anim * (f.calm ? 7 : 15) * dir;
+  const fade = Number.isFinite(sh.life) ? clamp01(sh.life / 0.1) : 1; // kurz vor dem Ende blendet er aus
+  const len = f.calm ? 40 : 58;
+
+  // Schweif: zwei übereinander liegende Spitzen, außen goldgelb, innen fast weiß
+  ctx.save();
+  ctx.translate(cx - dir * r * 0.4, cy);
+  ctx.scale(-dir * len, r * 0.95);
+  ctx.beginPath();
+  ctx.moveTo(0, -1);
+  ctx.lineTo(1, 0);
+  ctx.lineTo(0, 1);
+  ctx.closePath();
+  ctx.globalAlpha = 0.85 * fade;
+  ctx.fillStyle = G(f, 'shotTail', mkShotTail);
+  ctx.fill();
+  ctx.scale(1, 0.42);
+  ctx.globalAlpha = 0.9 * fade;
+  ctx.fillStyle = G(f, 'shotCore', mkShotCore);
+  ctx.fill();
+  ctx.restore();
+
+  glow(ctx, G(f, 'shotGlow', mkShotGlow), cx, cy, r * 2.3, r * 2.3, 0.85 * fade);
+
+  // Zwei blasse Nachbilder hinter dem Stern geben Tempo
+  ctx.fillStyle = '#ffd966';
+  for (let i = 1; i <= 2; i++) {
+    ctx.globalAlpha = (0.42 / i) * fade;
+    ctx.beginPath();
+    star5(ctx, cx - dir * i * r * 1.15, cy, r * (1 - 0.2 * i), r * (1 - 0.2 * i) * 0.45, spin - i * 0.6);
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = fade;
+  ctx.fillStyle = '#ffe27a';
+  ctx.strokeStyle = '#e39a14';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  star5(ctx, cx, cy, r, r * 0.46, spin);
+  ctx.stroke();
+  ctx.fill();
+  ctx.fillStyle = '#fffbe6';
+  ctx.beginPath();
+  star5(ctx, cx, cy, r * 0.52, r * 0.24, spin);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawShots(f) {
+  const list = f.s.shots;
+  if (!Array.isArray(list) || list.length === 0) return;
+  const n = Math.min(list.length, MAX_SHOTS_DRAWN);
+  for (let i = 0; i < n; i++) if (list[i] && typeof list[i] === 'object') drawShot(f, list[i]);
 }
 
 // ============================================================
@@ -955,7 +1406,8 @@ function drawParticle(f, p, sx, sy, a, color, detail, index) {
       const lw = clamp(size * 0.07, 1, 2.2);
       ctx.strokeStyle = color;
       ctx.beginPath();
-      ctx.arc(sx, sy, size, 0, TAU);
+      if (p.sq > 0 && p.sq < 1) ctx.ellipse(sx, sy, size, size * p.sq, 0, 0, TAU); // flacher Ring (Schockwelle am Boden)
+      else ctx.arc(sx, sy, size, 0, TAU);
       if (detail) {
         ctx.globalAlpha = a * 0.22;
         ctx.lineWidth = lw * 3.6;
@@ -1061,6 +1513,7 @@ export function drawCharacters(ctx, s, view) {
   const list = s.enemies || [];
   for (let i = 0; i < list.length; i++) if (list[i]) drawEnemy(f, list[i]);
   drawPlayer(f);
+  drawShots(f);
   drawParticles(f);
   if (f.debug) drawDebug(f);
   ctx.restore();

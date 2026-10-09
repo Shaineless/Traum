@@ -361,7 +361,10 @@ test('Blinkwolke: solid als Wolke mit Takt Ring, nicht solid nur als schwacher U
 
   // Aus: nichts Festes, Alpha höchstens ein Hauch, aber das Gerüst bleibt (gestrichelter Rand, Eckmarken)
   assert.equal(named(off, 'roundRect').filter((c) => c[3] > 100).length, 1, 'nur der Umriss als Pille');
-  assert.ok(maxOf(assigned(off, 'globalAlpha')) <= 0.6, `Alpha aus ${maxOf(assigned(off, 'globalAlpha'))}`);
+  assert.ok(maxOf(assigned(off, 'globalAlpha')) <= 0.5, `Alpha aus ${maxOf(assigned(off, 'globalAlpha'))}`);
+  // Das Alpha aus der Simulation steuert die Stärke des Umrisses
+  const offAt = (alpha) => maxOf(assigned(draw(blink({ solid: false, alpha }, 3), { reduceMotion: true }), 'globalAlpha'));
+  assert.ok(offAt(0.3) > offAt(0.15) && offAt(0.15) > offAt(0.08), 'schwacher Umriss folgt alpha');
   assert.ok(named(off, 'setLineDash').some((c) => c[1].length > 0), 'gestrichelt');
   assert.ok(!assigned(off, 'fillStyle').some((v) => typeof v === 'string' && v.startsWith('#') && v === '#f4fffa'));
   // Der feste Zustand hat viele Alpha 1 Flächen, der aus Zustand nicht: weder Körper noch Bäuche
@@ -621,6 +624,309 @@ test('Blitz: Flackern nur ohne reduceMotion, Wolke bei x und cloudY', () => {
   assert.ok(cloud && cloud[1] === 350, 'Wolke bei x minus camX');
 });
 
+// ---------- Kometen und Hagel ----------
+
+const R = COMET.RADIUS;
+
+function cometScene(phase, o = {}) {
+  const s = blank();
+  const h = createComet(s, o.x ?? 400, 360, { dir: o.dir ?? 1 });
+  const { x, dir, ...rest } = o;
+  Object.assign(h, { phase, charge: 0, progress: 0, timer: 0.8 }, rest);
+  s.hazards.push(h);
+  return s;
+}
+
+// Alle Aufrufe zwischen dem translate auf den Einschlagpunkt und dem Ende des Blocks (lokale Koordinaten, Ursprung am Boden)
+const atImpact = (ctx, x = 400, y = 360) => {
+  const i = ctx.calls.findIndex((c) => c[0] === 'translate' && c[1] === x && c[2] === y);
+  return i < 0 ? [] : ctx.calls.slice(i);
+};
+const arcsOf = (calls) => calls.filter((c) => c[0] === 'arc');
+const domeArcs = (calls) => arcsOf(calls).filter((c) => c[1] === 0 && c[2] === 0 && c[4] === Math.PI);
+
+test('Komet: jede Phase zeichnet, idle nur als schwache Markierung, Vorwarnung zeigt Ring, Fadenkreuz und Zielmarke', () => {
+  const idle = draw(cometScene('idle'));
+  const warn = draw(cometScene('warn', { charge: 0.5 }));
+  const strike = draw(cometScene('strike', { progress: 0.5 }));
+  const cool = draw(cometScene('cooldown', { timer: 0.8 }));
+  const base = draw(blank());
+  for (const [name, c] of [['idle', idle], ['warn', warn], ['strike', strike], ['cooldown', cool]]) {
+    assert.ok(shapes(c).length > 5, name);
+    assert.equal(allArgsFinite(c), true, name);
+  }
+  assert.ok(ops(base).length === 0);
+  assert.ok(shapes(idle).length < 20, 'idle ist leise');
+  assert.ok(shapes(warn).length > shapes(idle).length * 3 && shapes(strike).length > shapes(idle).length * 3 && shapes(cool).length > shapes(idle).length);
+  // Unbekannte Phase zeichnet wie idle
+  assert.equal(sig(draw(cometScene('seltsam'))), sig(idle));
+
+  // Ruhig (ohne Pulsieren) steht der Ring genau auf COMET.RADIUS: flache Ellipse am Boden und die Kuppel darüber
+  const calm = draw(cometScene('warn', { charge: 0.5 }), { reduceMotion: true });
+  const local = atImpact(calm);
+  assert.ok(local.length > 20, 'Block am Einschlagpunkt');
+  assert.ok(domeArcs(local).some((c) => c[3] === R && c[5] === Math.PI * 2), 'Kuppel mit Radius COMET.RADIUS');
+  assert.ok(local.some((c) => c[0] === 'ellipse' && c[1] === 0 && c[2] === 0 && Math.abs(c[3] - R * 1.06) < 1e-9 && c[4] === 7), 'flacher Zielring am Boden');
+  // Fadenkreuz: waagerechte und senkrechte Linie durch den Mittelpunkt
+  assert.ok(local.some((c) => c[0] === 'moveTo' && c[1] === -R - 17 && c[2] === -1) && local.some((c) => c[0] === 'lineTo' && c[1] === R + 17 && c[2] === -1), 'waagerecht');
+  assert.ok(local.some((c) => c[0] === 'moveTo' && c[1] === 0 && c[2] === -R - 19), 'senkrecht');
+  // Ohne Farbe lesbar: gestrichelter Ring, zwei Pfeilmarken (Dreiecke) und der Füllstandsbogen
+  assert.ok(local.some((c) => c[0] === 'setLineDash' && c[1].length === 2), 'gestrichelt');
+  assert.ok(local.filter((c) => c[0] === 'closePath').length >= 2 + 1, 'Dreiecke als Zielmarken');
+  assert.ok(domeArcs(local).some((c) => Math.abs(c[5] - (Math.PI + Math.PI * 0.5)) < 1e-9), 'Bogen zeigt die halbe Aufladung');
+  // Auch der Himmel zeigt die Vorwarnung: gestrichelte Führungslinie und ein Schweif Ansatz von der Bildoberkante
+  assert.ok(calm.calls.some((c) => c[0] === 'moveTo' && c[2] === 0 && c[1] > 400), 'Führungslinie beginnt oben im Bild');
+  assert.ok(named(calm, 'rotate').length >= 1, 'Schweif Ansatz');
+});
+
+test('Komet: der Füllstand folgt charge, die Marken laufen zusammen, die Wirkung wächst', () => {
+  const fill = (charge) => {
+    const c = draw(cometScene('warn', { charge }), { reduceMotion: true });
+    const a = domeArcs(atImpact(c)).filter((x) => x[5] < Math.PI * 2 - 1e-9);
+    return a.length ? a[0][5] - Math.PI : 0;
+  };
+  assert.equal(fill(0), 0, 'noch nichts gefüllt');
+  for (const c of [0.1, 0.3, 0.6, 0.9, 0.99]) assert.ok(Math.abs(fill(c) - Math.PI * c) < 1e-9, `Füllstand ${c}`);
+  // Ganz geladen schließt der Bogen den Halbkreis: zusätzliche Bögen gegenüber dem Start
+  const arcCount = (c) => domeArcs(atImpact(draw(cometScene('warn', { charge: c }), { reduceMotion: true }))).length;
+  assert.ok(arcCount(1) > arcCount(0));
+  // Zielmarken: die Dreiecke rücken mit charge näher an den Ring
+  const markX = (charge) => {
+    const c = draw(cometScene('warn', { charge }), { reduceMotion: true });
+    return maxOf(atImpact(c).filter((x) => x[0] === 'moveTo' && x[2] < -R * 0.4 && x[2] > -R * 1.6 && Math.abs(x[1]) > 10).map((x) => Math.abs(x[1])));
+  };
+  assert.ok(markX(0) > markX(0.5) && markX(0.5) > markX(1), 'Marken laufen zusammen');
+  // Leuchten und Schweif Ansatz am Himmel werden stärker
+  const glowMax = (charge) => maxOf(assigned(draw(cometScene('warn', { charge }), { reduceMotion: true }), 'globalAlpha'));
+  assert.ok(glowMax(1) >= glowMax(0));
+  const skyTail = (charge) => named(draw(cometScene('warn', { charge }), { reduceMotion: true }), 'scale').find((c) => c[1] <= 8 && c[2] > 20 && c[2] < 200);
+  assert.ok(skyTail(1)[2] > skyTail(0)[2], 'der Schweif wird länger');
+  assert.ok(skyTail(1)[1] > skyTail(0)[1], 'und breiter');
+  // charge außerhalb von 0 bis 1 oder kaputt: begrenzt
+  for (const charge of [-2, 5, NaN, undefined, Infinity]) {
+    const c = draw(cometScene('warn', { charge }));
+    assert.equal(allArgsFinite(c), true, `charge ${charge}`);
+    assert.ok(shapes(c).length > 30);
+  }
+});
+
+test('Komet: das Pulsieren wird mit charge schneller und hängt nicht an der Uhrzeit', () => {
+  const ringRx = (charge, time = 5, o = {}) => {
+    const c = draw(cometScene('warn', { charge }), { time, ...o });
+    return atImpact(c).find((x) => x[0] === 'ellipse').slice(3, 4)[0];
+  };
+  // Schwingungen des Rings entlang charge: Nulldurchgänge um den Ruhewert
+  const crossings = (from, to) => {
+    let n = 0;
+    let prev = Math.sign(ringRx(from) - R * 1.06);
+    for (let i = 1; i <= 80; i++) {
+      const sgn = Math.sign(ringRx(from + ((to - from) * i) / 80) - R * 1.06);
+      if (sgn !== 0 && prev !== 0 && sgn !== prev) n++;
+      if (sgn !== 0) prev = sgn;
+    }
+    return n;
+  };
+  const early = crossings(0.02, 0.5);
+  const late = crossings(0.5, 1);
+  assert.ok(late > early, `später schneller: ${early} gegen ${late}`);
+  assert.ok(late >= 4, `mindestens zwei volle Pulse am Ende: ${late}`);
+  // Der Ring bleibt innerhalb von etwa 10 Prozent seines Radius und wird mit charge ausgeprägter
+  const dev = (charge) => maxOf([0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1].map((k) => Math.abs(ringRx(k * charge) - R * 1.06)));
+  assert.ok(dev(1) < R * 1.06 * 0.12 && dev(1) > dev(0.3));
+  // Gleiche charge, andere Uhrzeit: derselbe Ring (die Phase kommt aus charge, nichts springt)
+  assert.equal(ringRx(0.7, 1.1), ringRx(0.7, 8.9));
+  // Ruhig: kein Pulsieren, Ring bleibt bei COMET.RADIUS, auch bei hoher charge
+  assert.equal(new Set([0.1, 0.3, 0.5, 0.8, 1].map((c) => ringRx(c, 5, { reduceMotion: true }))).size, 1);
+  assert.equal(ringRx(0.9, 5, { reduceMotion: true }), R * 1.06);
+  // Die Markierung bleibt auch ohne Bewegung vollständig: gleiche Formen wie mit Bewegung, nur andere Zahlen
+  const shapesOf = (o) => shapes(draw(cometScene('warn', { charge: 0.6 }), o)).map((c) => c[0]).join(',');
+  assert.equal(shapesOf({ reduceMotion: true }), shapesOf({}));
+});
+
+test('Komet: Anflug entlang der Schräge, Schweif gegen die Flugrichtung, Einschlag Blitz erst am Ende', () => {
+  for (const dir of [1, -1]) {
+    for (const progress of [0.2, 0.5, 0.8, 0.97]) {
+      const s = cometScene('strike', { progress, dir });
+      const h = s.hazards[0];
+      const pos = cometPosition(h);
+      const ctx = draw(s, { reduceMotion: true });
+      // Kopf bei cometPosition (Bildkoordinaten)
+      assert.ok(named(ctx, 'translate').some((c) => c[1] === pos.x && c[2] === pos.y), `Kopf bei der Bahnposition (dir ${dir}, ${progress})`);
+      // Schweif zeigt von der Position zurück zum Start der Bahn (Richtung weg vom Einschlagpunkt, nach oben)
+      const start = cometPosition({ ...h, phase: 'warn' });
+      const len = Math.hypot(start.x - h.x, start.y - h.y);
+      const rot = named(ctx, 'rotate').slice(0, 3);
+      assert.equal(rot.length, 3, 'drei Schweifschichten');
+      for (const [, a] of rot) {
+        assert.ok(Math.abs(Math.sin(a) - (start.x - h.x) / len) < 1e-9 && Math.abs(-Math.cos(a) - (start.y - h.y) / len) < 1e-9, `Schweifrichtung dir ${dir}`);
+      }
+      // Die Schweifschichten werden von breit nach schmal gezeichnet
+      const widths = named(ctx, 'scale').filter((c) => c[2] > 100 && c[1] < 25).slice(0, 3).map((c) => c[1]);
+      assert.deepEqual([...widths].sort((p, q) => q - p), widths);
+      // Der Schadenskreis bleibt in der ganzen Phase markiert
+      assert.ok(domeArcs(atImpact(ctx)).length >= 1);
+    }
+  }
+  // Einschlag: Fächer aus Funken erst in der letzten Hälfte des Flugs
+  const burst = (progress) => atImpact(draw(cometScene('strike', { progress }), { reduceMotion: true })).filter((c) => c[0] === 'lineTo').length;
+  assert.equal(burst(0.3), burst(0.5), 'bis zur Hälfte kein Einschlag');
+  assert.ok(burst(0.8) > burst(0.5) + 4 && burst(0.97) >= burst(0.8), 'Fächer beim Einschlag');
+  // Hoch am Himmel (außerhalb des Bildes) wird der Kopf nicht gezeichnet
+  const high = cometScene('strike', { progress: 0 });
+  assert.ok(!named(draw(high), 'rotate').length, 'noch nicht im Bild: kein Kopf, kein Schweif');
+  // Fortschritt außerhalb oder kaputt
+  for (const progress of [-1, 2, NaN, undefined]) assert.equal(allArgsFinite(draw(cometScene('strike', { progress }))), true);
+  // Bewegung nur ohne reduceMotion (Funken des Schweifs flimmern)
+  const s = cometScene('strike', { progress: 0.6 });
+  assert.ok(new Set([0.1, 0.4, 0.9, 1.7].map((time) => sig(draw(s, { time })))).size > 1);
+  assert.equal(new Set([0.1, 0.4, 0.9, 1.7].map((time) => sig(draw(s, { time, reduceMotion: true })))).size, 1);
+});
+
+test('Komet: Glut und Funken nach dem Einschlag klingen mit timer ab', () => {
+  const alphaMax = (timer, o = {}) => maxOf(assigned(draw(cometScene('cooldown', { timer }), o), 'globalAlpha'));
+  assert.equal(alphaMax(COMET.COOLDOWN), 1, 'ganz frisch glüht es voll');
+  assert.ok(alphaMax(0.2) < 0.7 && alphaMax(0.2) < alphaMax(0.9) && alphaMax(0.9) <= alphaMax(COMET.COOLDOWN));
+  const fresh = draw(cometScene('cooldown', { timer: COMET.COOLDOWN }), { reduceMotion: true });
+  // Kein Rechteck aus einem vergessenen Füllstil: jeder fillRect hat einen Verlauf oder eine Farbe, die zuletzt gesetzt wurde
+  const lastFill = (ctx) => {
+    const out = [];
+    const stack = [];
+    let cur = null;
+    for (const c of ctx.calls) {
+      if (c[0] === 'save') stack.push(cur);
+      else if (c[0] === 'restore') cur = stack.pop() ?? null;
+      else if (c[0] === '=fillStyle') cur = c[1];
+      else if (c[0] === 'fillRect') out.push(cur);
+    }
+    return out;
+  };
+  for (const f of lastFill(fresh)) assert.ok(f !== 'rgba(52,24,62,0.55)', 'Brandfleck Farbe füllt kein Rechteck');
+  // Brandfleck bleibt, solange es glüht, flackernde Glutpunkte nur ohne reduceMotion
+  const s = cometScene('cooldown', { timer: 1 });
+  assert.ok(new Set([0.1, 0.5, 1.3].map((time) => sig(draw(s, { time })))).size > 1);
+  assert.equal(new Set([0.1, 0.5, 1.3].map((time) => sig(draw(s, { time, reduceMotion: true })))).size, 1);
+  for (const timer of [NaN, undefined, -3, 100]) assert.equal(allArgsFinite(draw(cometScene('cooldown', { timer }))), true);
+});
+
+test('Komet: nur sichtbar, wenn Einschlagpunkt oder Bahn im Bild liegen', () => {
+  for (const phase of ['idle', 'warn', 'strike', 'cooldown']) {
+    for (const camX of [0, 7000]) {
+      const far = (x) => ops(draw(cometScene(phase, { x: camX + x, charge: 0.5, progress: 0.5 }), { camX })).length;
+      assert.equal(far(-1500), 0, `${phase} weit links`);
+      assert.equal(far(W + 1500), 0, `${phase} weit rechts`);
+      const ctx = draw(cometScene(phase, { x: camX + 400, charge: 0.5, progress: 0.5 }), { camX });
+      assert.ok(shapes(ctx).length > 5, `${phase} im Bild`);
+    }
+  }
+  // Einschlagpunkt rechts außerhalb, aber die Bahn kommt von links ins Bild: wird gezeichnet
+  const route = (x, dir) => ops(draw(cometScene('strike', { x, dir, progress: 0.5 }))).length;
+  assert.ok(route(W + 400, -1) > 0, 'Bahn im Bild');
+  assert.equal(route(W + 400, 1), 0, 'Bahn führt nach rechts aus dem Bild');
+  assert.equal(route(W + 700, -1), 0);
+  assert.equal(route(-700, 1), 0);
+  assert.ok(route(-200, 1) > 0, 'Bahn kommt von rechts ins Bild');
+  // Kaputte Kometen werden übersprungen
+  const bad = blank();
+  bad.hazards.push({ id: 1, kind: 'comet', x: NaN, y: 360, phase: 'warn' }, { id: 2, kind: 'comet', x: 300, y: Infinity, phase: 'strike' }, { id: 3, kind: 'comet', x: 300 }, null, { kind: 'comet' });
+  assert.equal(ops(draw(bad)).length, 0);
+  assert.equal(allArgsFinite(draw(bad, { debug: true })), true);
+});
+
+test('Debug: Kometenkreis mit COMET.RADIUS und Trefferkreise der Hagelkörner, nur mit view.debug', () => {
+  const s = blank();
+  const c = createComet(s, 400, 360);
+  c.phase = 'warn';
+  const h = createHail(s, 250, 150, 30, 300);
+  s.hazards.push(c, h);
+  const plain = draw(s, { camX: 50 });
+  assert.equal(named(plain, 'fillText').length, 0);
+  const dbg = draw(s, { camX: 50, debug: true });
+  const cb = cometHitbox(c);
+  const hb = hailHitbox(h);
+  const arcs = named(dbg, 'arc');
+  assert.ok(arcs.some((a) => a[1] === cb.x - 50 && a[2] === cb.y && a[3] === cb.r && a[5] === Math.PI * 2), 'Schadenskreis des Kometen');
+  assert.ok(arcs.some((a) => a[1] === hb.x - 50 && a[2] === hb.y && a[3] === hb.r && a[5] === Math.PI * 2), 'Trefferkreis des Hagels');
+  assert.ok(named(dbg, 'fillText').some((t) => t[1].includes(`#${c.id}`) && t[1].includes('warn')), 'Beschriftung mit Phase');
+  // Außerhalb der Phase strike ist der Kreis gestrichelt, in der Phase strike durchgezogen
+  const dashes = (phase) => { c.phase = phase; return named(draw(s, { camX: 50, debug: true }), 'setLineDash').filter((d) => d[1].length === 2 && d[1][0] === 3 && d[1][1] === 3).length; };
+  assert.ok(dashes('warn') > dashes('strike'));
+  // Hagel und Komet fern vom Bild bekommen keinen Debug Kreis
+  const away = blank();
+  away.hazards.push(createComet(away, 5000, 360), createHail(away, 5000, 100, 0, 300));
+  assert.equal(named(draw(away, { debug: true }), 'arc').length, 0);
+});
+
+const hailOne = (x, y, vx, vy, o = {}) => {
+  const s = blank();
+  const h = createHail(s, x, y, vx, vy);
+  Object.assign(h, o);
+  s.hazards.push(h);
+  return s;
+};
+
+test('Hagel: Eiskugel am Mittelpunkt, Schweif entlang des Geschwindigkeitsvektors, Radius HAIL.R', () => {
+  for (const [vx, vy] of [[0, 300], [100, 300], [-180, 260], [300, 0], [-60, -200], [20, 40]]) {
+    const ctx = draw(hailOne(400, 200, vx, vy), { reduceMotion: true });
+    const body = named(ctx, 'arc').filter((a) => a[3] === HAIL.R && a[5] === Math.PI * 2);
+    assert.ok(body.some((a) => a[1] === 400 && a[2] === 200), `Körper bei (400, 200) mit Radius ${HAIL.R}`);
+    // Der Schweif beginnt an den Seiten des Korns und läuft in die Gegenrichtung der Geschwindigkeit
+    const tip = named(ctx, 'lineTo')[0];
+    const dx = tip[1] - 400;
+    const dy = tip[2] - 200;
+    const d = Math.hypot(dx, dy);
+    const sp = Math.hypot(vx, vy);
+    assert.ok(d >= 14 && d <= 42 * 1.35 + 1e-9, `Schweiflänge ${d}`);
+    assert.ok(Math.abs(dx * vy - dy * vx) / (d * sp) < 1e-9, 'Schweif liegt auf der Linie der Geschwindigkeit');
+    assert.ok(dx * vx + dy * vy < 0, 'und zeigt gegen die Flugrichtung');
+  }
+  // Schneller heißt länger, bis zur Obergrenze
+  const tail = (vy) => { const t = named(draw(hailOne(400, 200, 0, vy), { reduceMotion: true }), 'lineTo')[0]; return Math.abs(t[2] - 200); };
+  assert.ok(tail(300) > tail(150) && tail(150) > tail(60));
+  assert.ok(Math.abs(tail(900) - tail(1500)) < 1e-9, 'Länge ist begrenzt');
+  // Ohne Tempo gibt es keinen Schweif, aber immer noch die Kugel
+  const still = draw(hailOne(400, 200, 0, 0), { reduceMotion: true });
+  const moving = draw(hailOne(400, 200, 0, 300), { reduceMotion: true });
+  assert.equal(named(moving, 'closePath').length - named(still, 'closePath').length, 2, 'zwei Schweifschichten fehlen');
+  assert.ok(named(still, 'arc').length >= 3);
+  // Hellblaue Eisfarben mit weißem Glanz
+  assert.ok(assigned(moving, 'fillStyle').includes('#cfe5fb') && assigned(moving, 'fillStyle').includes('#ffffff'));
+  assert.ok(assigned(moving, 'strokeStyle').includes('#86aee6'));
+});
+
+test('Hagel: viele Körner brauchen wenige Aufrufe pro Korn, Verläufe gar keine, Bewegung nur ohne reduceMotion', () => {
+  const many = (n) => {
+    const s = blank();
+    for (let i = 0; i < n; i++) s.hazards.push(createHail(s, 60 + i * 40, 60 + ((i * 29) % 260), (i % 5 - 2) * 40, 300));
+    return s;
+  };
+  const one = draw(many(1));
+  const all = draw(many(LIMITS.MAX_HAZARDS));
+  assert.equal(all.stats.gradients, 0, 'kein Verlauf für Hagel');
+  assert.ok(ops(all).length < ops(one).length + (LIMITS.MAX_HAZARDS - 1) * 32, `${ops(all).length} Aufrufe für ${LIMITS.MAX_HAZARDS} Körner`);
+  assert.equal(allArgsFinite(all), true);
+  // Kanten im Eis drehen sich mit anim, Funkeln wechselt mit der Zeit
+  const s = hailOne(300, 150, 0, 300);
+  assert.notEqual(sig(draw(s, { time: 1.3 })), sig(draw(hailOne(300, 150, 0, 300, { anim: 1.1 }), { time: 1.3 })));
+  assert.ok(new Set([0.1, 0.6, 1.4].map((time) => sig(draw(s, { time })))).size > 1);
+  assert.equal(new Set([0.1, 0.6, 1.4].map((time) => sig(draw(s, { time, reduceMotion: true })))).size, 1);
+  const turned = hailOne(300, 150, 0, 300, { anim: 2.5 });
+  assert.equal(sig(draw(s, { reduceMotion: true })), sig(draw(turned, { reduceMotion: true })), 'ruhig drehen sich die Kanten nicht');
+  // Hagel unter dem Bild, weit links und rechts, NaN: nichts
+  const anchor = blank();
+  ground(anchor);
+  const anchorSig = sig(draw(anchor));
+  for (const [x, y] of [[300, 600], [300, -200], [-900, 100], [W + 600, 100], [NaN, 100], [300, NaN], [Infinity, 100]]) {
+    const s2 = blank();
+    ground(s2);
+    s2.hazards.push(createHail(s2, x, y, 0, 300));
+    assert.equal(sig(draw(s2)), anchorSig, `(${x}, ${y}) wird nicht gezeichnet`);
+  }
+  assert.equal(allArgsFinite(draw(hailOne(300, 150, NaN, undefined))), true);
+  assert.ok(shapes(draw(hailOne(W + 100, 100, 0, 300))).length > 0, 'am Rand noch sichtbar');
+  // Der Zustand wird nie verändert (draw() prüft das), auch nicht bei zerstörten Körnern
+  assert.doesNotThrow(() => draw(hailOne(300, 150, 0, 300, { life: -1 })));
+});
+
 // ---------- Sammelobjekte ----------
 
 // Oberste Spitze des ersten Sterns: moveTo des Pentagramms
@@ -662,9 +968,9 @@ test('Sterne: normal, Risiko, Event, fallend, eingesammelt', () => {
   assert.notDeepEqual(starTop(draw(a)), starTop(draw(b)));
 });
 
-test('Powerups: vier unterscheidbare Symbole, Farben aus POWERUPS', () => {
+test('Powerups: fünf unterscheidbare Symbole, Farben aus POWERUPS, Doppelpunkte mit x2', () => {
   const logs = {};
-  for (const type of ['shield', 'dash', 'magnet', 'feather']) {
+  for (const type of ['shield', 'dash', 'magnet', 'feather', 'double']) {
     const s = blank();
     s.powerups.push(createPowerup(s, type, 300, 250));
     const ctx = draw(s, { reduceMotion: true });
@@ -672,7 +978,22 @@ test('Powerups: vier unterscheidbare Symbole, Farben aus POWERUPS', () => {
     assert.ok(shapes(ctx).length > 15, type);
     assert.ok(assigned(ctx, 'strokeStyle').includes(POWERUPS[type].color), `${type}: Blase in der Farbe`);
   }
-  assert.equal(new Set(Object.values(logs)).size, 4, 'alle vier sehen verschieden aus');
+  assert.equal(new Set(Object.values(logs)).size, 5, 'alle fünf sehen verschieden aus');
+
+  // Doppelpunkte: orange Blase, darin ein x und eine 2 aus Strichen und ein Funkelstern, nichts vom Rest
+  const dbl = blank();
+  dbl.powerups.push(createPowerup(dbl, 'double', 300, 250));
+  const cd = draw(dbl, { reduceMotion: true });
+  assert.equal(POWERUPS.double.color, '#ffb86b');
+  assert.ok(assigned(cd, 'strokeStyle').includes('#fff6e0') && assigned(cd, 'strokeStyle').includes('#c25a0c'), 'helles x2 auf dunkler Unterlage');
+  const glyph = named(cd, 'lineTo').filter((c) => Math.abs(c[1]) < 12 && Math.abs(c[2]) < 8);
+  assert.ok(glyph.length >= 3, 'Ziffer 2 aus Linien');
+  assert.ok(named(cd, 'quadraticCurveTo').length >= 6, 'Kurven der 2 und der Funkelstern');
+  // Die Blase schwebt wie die anderen, das x2 bleibt darin
+  const dy = (time, o = {}) => named(draw(dbl, { time, ...o }), 'translate')[0][2];
+  assert.notEqual(dy(0.3), dy(1.4));
+  assert.equal(dy(0.3, { reduceMotion: true }), dy(1.4, { reduceMotion: true }));
+  assert.ok(assigned(draw(dbl), 'fillStyle').includes('rgba(255,184,107,0.2)'), 'Blasenfüllung in Orange');
 
   const s = blank();
   s.powerups.push(createPowerup(s, 'unbekannt', 300, 250));
@@ -722,7 +1043,7 @@ test('Traumtor: Mondring von gate.y nach oben, nach dem Durchlaufen verblasst es
 
 // ---------- Reihenfolge ----------
 
-test('Reihenfolge von hinten nach vorn: Regen, Wind, Plattformen, Tor, Stachelwolken, Blitze, Powerups, Tor vorn', () => {
+test('Reihenfolge von hinten nach vorn: Regen, Wind, Plattformen, Tor, Stachelwolken, Blitze, Kometen, Hagel, Powerups, Tor vorn', () => {
   const s = blank();
   const rain = createRain(s, 10, 120, { y: 70 });
   rain.active = true;
@@ -732,6 +1053,8 @@ test('Reihenfolge von hinten nach vorn: Regen, Wind, Plattformen, Tor, Stachelwo
   s.gates.push(createGate(s, 600, 330, 1));
   s.hazards.push(createSpike(s, plat, 0.1));
   s.hazards.push(createLightning(s, 700));
+  s.hazards.push(createComet(s, 250, 300));
+  s.hazards.push(createHail(s, 420, 180, 20, 300));
   s.powerups.push(createPowerup(s, 'dash', 650, 123));
   s.stars.push(createStar(s, 520, 150));
   const ctx = draw(s, { reduceMotion: true });
@@ -744,9 +1067,11 @@ test('Reihenfolge von hinten nach vorn: Regen, Wind, Plattformen, Tor, Stachelwo
   const iGateBack = translateAt(600, 330);
   const iSpike = translateAt(plat.x + 0.1 * (plat.w - 36), plat.y - 28);
   const iBolt = translateAt(700, 52);
+  const iComet = translateAt(250, 300);
+  const iHail = idx((c) => c[0] === 'arc' && c[1] === 420 && c[2] === 180 && c[3] === HAIL.R);
   const iPower = translateAt(650, 123);
   const iGateFront = idx((c) => c[0] === 'ellipse' && c[6] === Math.PI * 0.62);
-  const order = [iRain, iWind, iPlat, iGateBack, iSpike, iBolt, iPower, iGateFront];
+  const order = [iRain, iWind, iPlat, iGateBack, iSpike, iBolt, iComet, iHail, iPower, iGateFront];
   assert.ok(order.every((i) => i >= 0), `alle Objekte gezeichnet: ${order}`);
   assert.deepEqual([...order].sort((a, b) => a - b), order, `Reihenfolge ${order}`);
 });
@@ -759,6 +1084,13 @@ test('Objekte außerhalb des Bildes erzeugen keine Aufrufe, Objekte im Randberei
     wolke: (s, x) => { s.platforms.push(createStaticPlatform(s, x, 300, 120)); },
     beweglich: (s, x) => { const m = createMovingPlatform(s, x, 250, 100, { ax: 20 }); s.platforms.push(m); },
     brüchig: (s, x) => { s.platforms.push(createBreakablePlatform(s, x, 300, 100)); },
+    sprung: (s, x) => { s.platforms.push(createSpringPlatform(s, x, 300, 100)); },
+    eis: (s, x) => { s.platforms.push(createStaticPlatform(s, x, 300, 120, { slick: true })); },
+    eisBoden: (s, x) => { s.platforms.push(createStaticPlatform(s, x, 360, 200, { ground: true, slick: true })); },
+    blink: (s, x) => { s.platforms.push(createBlinkPlatform(s, x, 300, 100)); },
+    komet: (s, x) => { const c = createComet(s, x, 360); c.phase = 'warn'; c.charge = 0.5; s.hazards.push(c); },
+    hagel: (s, x) => { s.hazards.push(createHail(s, x, 200, 0, 300)); },
+    doppelpunkte: (s, x) => { s.powerups.push(createPowerup(s, 'double', x, 200)); },
     stachel: (s, x) => { s.hazards.push(createSpike(s, createStaticPlatform(s, x, 300, 100), 0.5)); },
     blitz: (s, x) => { const l = createLightning(s, x); l.phase = 'strike'; s.hazards.push(l); },
     wind: (s, x) => { s.zones.push(createWind(s, x, 100, 150, 150, { vx: 100 })); },
@@ -823,6 +1155,29 @@ test('Debug: Hitboxen und IDs der Plattformen, nur wenn view.debug gesetzt ist',
   assert.ok(named(draw(z, { debug: true }), 'strokeRect').some((c) => c[1] === hb.x + 0.5 && c[2] === hb.y + 0.5 && c[3] === hb.w - 1 && c[4] === hb.h - 1));
 });
 
+test('Debug: Sprungwolke und Blinkwolke zeigen ihre Hitbox, die verschwundene Blinkwolke gestrichelt', () => {
+  const s = blank();
+  const sp = createSpringPlatform(s, 100, 250, 100);
+  const on = createBlinkPlatform(s, 300, 250, 100);
+  const off = createBlinkPlatform(s, 500, 250, 100);
+  off.solid = false;
+  off.alpha = 0.15;
+  const ice = createStaticPlatform(s, 650, 250, 100, { slick: true });
+  s.platforms.push(sp, on, off, ice);
+  const dbg = draw(s, { debug: true, reduceMotion: true });
+  const rects = named(dbg, 'strokeRect');
+  for (const p of [sp, on, off, ice]) assert.ok(rects.some((c) => c[1] === p.x + 0.5 && c[2] === p.y + 0.5 && c[3] === p.w - 1 && c[4] === p.h - 1), `Hitbox ${p.kind} ${p.id}`);
+  const texts = named(dbg, 'fillText').map((c) => c[1]);
+  assert.ok(texts.includes(`#${sp.id} spring`) && texts.includes(`#${on.id} blink`) && texts.includes(`#${ice.id}`));
+  // Nur die nicht feste Blinkwolke wird gestrichelt umrandet: Strichmuster direkt vor ihrer Hitbox und danach wieder zurückgesetzt
+  const list = ops(dbg);
+  const i = list.findIndex((c) => c[0] === 'strokeRect' && c[1] === off.x + 0.5);
+  assert.deepEqual(list[i - 1], ['setLineDash', [3, 3]]);
+  assert.deepEqual(list[i + 1], ['setLineDash', []]);
+  const j = list.findIndex((c) => c[0] === 'strokeRect' && c[1] === on.x + 0.5);
+  assert.notDeepEqual(list[j - 1], ['setLineDash', [3, 3]]);
+});
+
 // ---------- reduceMotion ----------
 
 test('reduceMotion: ruhige Szene ändert sich mit der Zeit nicht mehr', () => {
@@ -843,7 +1198,21 @@ test('reduceMotion: ruhige Szene ändert sich mit der Zeit nicht mehr', () => {
   l.charge = 0.9;
   s.hazards.push(l);
   for (const bonus of ['normal', 'risk', 'event']) s.stars.push(createStar(s, 150 + s.stars.length * 40, 300, { bonus }));
-  s.powerups.push(createPowerup(s, 'feather', 700, 250));
+  s.powerups.push(createPowerup(s, 'feather', 700, 250), createPowerup(s, 'double', 640, 250));
+  // Neue Objekte: Sprungwolke, Eiswolke, Blinkwolke in der Vorwarnung, Komet in jeder Phase, Hagel
+  const spr = createSpringPlatform(s, 20, 150, 90);
+  spr.press = 0.6;
+  s.platforms.push(spr, createStaticPlatform(s, 140, 120, 150, { slick: true }), createStaticPlatform(s, 330, 110, 100, { slick: true, ground: true }));
+  const bl = createBlinkPlatform(s, 480, 120, 100);
+  bl.warn = true;
+  bl.alpha = 0.5;
+  s.platforms.push(bl);
+  for (const [i, phase] of ['idle', 'warn', 'strike', 'cooldown'].entries()) {
+    const c = createComet(s, 150 + i * 160, 360);
+    Object.assign(c, { phase, charge: 0.6, progress: 0.7, timer: 0.9 });
+    s.hazards.push(c);
+  }
+  s.hazards.push(createHail(s, 260, 80, 40, 300), createHail(s, 560, 140, -40, 300));
   const set = (o) => new Set([0.2, 1.7, 3.1, 9.9, 20.5].map((time) => sig(draw(s, { time, ...o }))));
   assert.ok(set({}).size > 1, 'ohne reduceMotion bewegt sich etwas');
   assert.equal(set({ reduceMotion: true }).size, 1, 'mit reduceMotion steht alles ruhig');
@@ -871,6 +1240,11 @@ test('kaputte Objekte (NaN, Infinity, fehlende Felder) werden übersprungen', ()
   s.hazards.push({ id: 907, kind: 'spike', x: NaN, y: 100, w: 36, h: 28 }, { id: 908, kind: 'lightning', x: 300 }, null, { kind: 'unbekannt', x: 100 });
   s.zones.push({ id: 909, kind: 'wind', x: 100, y: 100, w: NaN, h: 50, vx: 5, ay: 0 }, { id: 910, kind: 'rain', x: 100, y: NaN, w: 100 }, null);
   s.gates.push({ id: 911, kind: 'gate', x: NaN, y: 300 }, null);
+  s.platforms.push({ id: 920, kind: 'spring', x: 100, y: 200, w: 90, press: NaN }, { id: 921, kind: 'spring', x: NaN, y: 200, w: 90 }, { id: 922, kind: 'blink', x: 100, y: 200, w: 90 }, { id: 923, kind: 'blink', x: 100, y: NaN, w: 90, solid: true });
+  s.platforms.push({ id: 924, kind: 'static', x: 100, y: 100, w: 90, slick: true, h: NaN }, { id: 925, kind: 'static', x: 100, y: 100, w: 1e12, slick: true, ground: true });
+  s.hazards.push({ id: 926, kind: 'comet', x: NaN, y: 360, phase: 'warn' }, { id: 927, kind: 'comet', x: 200, y: 360, phase: 'strike', progress: NaN, charge: NaN, dir: NaN }, { id: 928, kind: 'comet', x: 250, y: 360 });
+  s.hazards.push({ id: 929, kind: 'hail', x: NaN, y: 100 }, { id: 930, kind: 'hail', x: 200, y: 100 }, { id: 931, kind: 'hail', x: 300, y: Infinity, vx: 1, vy: 1 });
+  s.powerups.push({ id: 932, kind: 'powerup', type: 'double', x: NaN, y: 100 }, { id: 933, kind: 'powerup', type: 'double', x: 300, y: 100 });
   let ctx;
   assert.doesNotThrow(() => { ctx = draw(s); });
   assert.equal(allArgsFinite(ctx), true);
@@ -891,28 +1265,47 @@ function fullWorld(spread) {
   for (let i = 0; i < LIMITS.MAX_PLATFORMS; i++) {
     const x = at(i, LIMITS.MAX_PLATFORMS);
     const y = 150 + ((i * 37) % 200);
-    if (i % 5 === 0) s.platforms.push(createStaticPlatform(s, x, 330, 260, { ground: true }));
-    else if (i % 5 === 1) s.platforms.push(createMovingPlatform(s, x + 40, y, 100, { ax: i % 2 ? 40 : 0, ay: i % 2 ? 0 : 30 }));
-    else if (i % 5 === 2) {
+    const kind = i % 9;
+    if (kind === 0) s.platforms.push(createStaticPlatform(s, x, 330, 260, { ground: true, slick: i % 18 === 0 }));
+    else if (kind === 1) s.platforms.push(createMovingPlatform(s, x + 40, y, 100, { ax: i % 2 ? 40 : 0, ay: i % 2 ? 0 : 30 }));
+    else if (kind === 2) {
       const p = createBreakablePlatform(s, x, y, 100);
       p.state = ['idle', 'armed', 'shaking'][i % 3];
       p.timer = 0.6;
       p.alpha = 0.8;
+      s.platforms.push(p);
+    } else if (kind === 3) {
+      const p = createSpringPlatform(s, x, y, 90);
+      p.press = (i % 4) / 4;
+      s.platforms.push(p);
+    } else if (kind === 4) s.platforms.push(createStaticPlatform(s, x, y, 140, { slick: true }));
+    else if (kind === 5) {
+      const p = createBlinkPlatform(s, x, y, 100, { phase: (i % 7) / 7 });
+      p.solid = i % 3 !== 0;
+      p.warn = p.solid && i % 2 === 0;
+      p.alpha = p.solid ? (p.warn ? 0.6 : 1) : 0.15;
       s.platforms.push(p);
     } else s.platforms.push(createStaticPlatform(s, x, y, 120));
   }
   const bonus = ['normal', 'risk', 'event'];
   for (let i = 0; i < LIMITS.MAX_STARS; i++) s.stars.push(createStar(s, at(i, LIMITS.MAX_STARS), 60 + ((i * 53) % 280), { bonus: bonus[i % 3], falling: i % 7 === 0 }));
   const phases = ['idle', 'glow', 'flicker', 'strike', 'cooldown'];
+  const cometPhases = ['idle', 'warn', 'strike', 'cooldown'];
   for (let i = 0; i < LIMITS.MAX_HAZARDS; i++) {
     const x = at(i, LIMITS.MAX_HAZARDS);
-    if (i % 2) {
+    if (i >= 12) s.hazards.push(createHail(s, x, 80 + ((i * 41) % 200), (i % 5 - 2) * 40, 300));
+    else if (i % 3 === 0) s.hazards.push(createSpike(s, s.platforms[(i * 3) % s.platforms.length], 0.5));
+    else if (i % 3 === 1) {
       const l = createLightning(s, x);
       l.phase = phases[i % 5];
       l.charge = 0.9;
       l.timer = 0.4;
       s.hazards.push(l);
-    } else s.hazards.push(createSpike(s, s.platforms[(i * 3) % s.platforms.length], 0.5));
+    } else {
+      const c = createComet(s, x, 360, { dir: i % 2 ? 1 : -1 });
+      Object.assign(c, { phase: cometPhases[i % 4], charge: 0.6, progress: 0.5 + (i % 3) / 8, timer: 0.8 });
+      s.hazards.push(c);
+    }
   }
   for (let i = 0; i < 5; i++) {
     const x = at(i, 5);
@@ -923,7 +1316,7 @@ function fullWorld(spread) {
       s.zones.push(r);
     } else s.zones.push(createWind(s, x, 100, 220, 220, { vx: 100, ay: i % 4 ? 0 : -300 }));
   }
-  ['shield', 'dash', 'magnet', 'feather'].forEach((t, i) => s.powerups.push(createPowerup(s, t, at(i, 4), 200)));
+  ['shield', 'dash', 'magnet', 'feather', 'double'].forEach((t, i) => s.powerups.push(createPowerup(s, t, at(i, 5), 200)));
   s.gates.push(createGate(s, at(1, 3), 360, 1));
   s.gates.push(createGate(s, at(2, 3), 360, 2));
   return s;
@@ -966,9 +1359,12 @@ test('alles auf einmal im Bild: Detailstufen halten den Aufwand begrenzt', () =>
 
 test('echte Spielwelten aus dem Generator: kein Fehler, endliche Werte, unter 2500 Aufrufen', () => {
   let drawn = 0;
+  const seen = new Set();
+  let worst = 0;
   for (const seed of [1, 2, 3]) {
     const s = newGame(seed);
-    for (let x = 0; x < 60000; x += 400) {
+    // bis in den Albtraum (3200 Meter sind 160000 px), dort kommen alle neuen Objekte vor
+    for (let x = 0; x < 170000; x += 400) {
       s.camX = x;
       s.player.x = x + 200;
       s.t = x / 300;
@@ -977,15 +1373,49 @@ test('echte Spielwelten aus dem Generator: kein Fehler, endliche Werte, unter 25
       if (x % 2000 !== 0) continue;
       const blend = (x / 2000) % 3 === 0 ? 0.5 : 1;
       s.world = { index: (x / 2000) % 4, from: (x / 2000) % 4, to: ((x / 2000) + 1) % 4, blend, gatesPassed: 0 };
+      for (const p of s.platforms) if (p.x < x + W && p.x + p.w > x) seen.add(p.kind === 'static' && p.slick ? 'ice' : p.kind);
+      for (const h of s.hazards) if (h.x < x + W && h.x > x) seen.add(h.kind);
       for (const o of [{}, { debug: true }, { reduceMotion: true }]) {
         const ctx = draw(s, { camX: x, time: x / 97, ...o });
         assert.ok(ops(ctx).length < 2500, `seed ${seed} x ${x}: ${ops(ctx).length} Aufrufe`);
         assert.equal(allArgsFinite(ctx), true);
+        worst = Math.max(worst, ops(ctx).length);
         drawn += shapes(ctx).length > 0 ? 1 : 0;
       }
     }
   }
-  assert.ok(drawn > 50, 'die meisten Frames zeigen etwas');
+  assert.ok(drawn > 150, 'die meisten Frames zeigen etwas');
+  for (const k of ['spring', 'ice', 'blink', 'comet']) assert.ok(seen.has(k), `${k} kam im Bild vor`);
+  assert.ok(worst > 150, `größtes Bild ${worst}`);
+});
+
+test('echter Lauf mit Hagelwolke und Komet: jeder Schritt zeichnet ohne Fehler, alle Phasen und Hagel kommen im Bild vor', () => {
+  const s = createState({ seed: 11 });
+  s.world = { index: 1, from: 1, to: 1, blend: 1, gatesPassed: 0 };
+  s.platforms.push(createStaticPlatform(s, -300, 360, 1800, { ground: true }));
+  s.platforms.push(createSpringPlatform(s, 700, 300, 90), createBlinkPlatform(s, 520, 260, 100, { period: 3.4, phase: 0.2 }));
+  const cloud = createHailcloud(s, 380, 110, { range: 160 });
+  s.enemies.push(cloud);
+  s.hazards.push(createComet(s, 560, 360, { idle: 0.5 }));
+  s.player.x = 60;
+  s.player.y = 360 - s.player.h;
+  const phases = new Set();
+  let hails = 0;
+  let blinkSolid = new Set();
+  for (let i = 0; i < 60 * 14; i++) {
+    stepSim(s, input({}), 1 / 60);
+    if (s.mode !== 'playing') break;
+    if (i % 3) continue;
+    for (const h of s.hazards) if (h.kind === 'comet') phases.add(h.phase);
+    for (const p of s.platforms) if (p.kind === 'blink') blinkSolid.add(p.solid ? (p.warn ? 'warn' : 'fest') : 'weg');
+    const ctx = draw(s, { time: i / 60 });
+    assert.equal(allArgsFinite(ctx), true, `Schritt ${i}`);
+    assert.ok(ops(ctx).length < 2500);
+    hails += named(ctx, 'arc').filter((a) => a[3] === HAIL.R && a[5] === Math.PI * 2).length;
+  }
+  assert.deepEqual([...phases].sort(), ['cooldown', 'idle', 'strike', 'warn'], 'der Komet durchläuft alle Phasen');
+  assert.ok(hails > 10, `Hagelkörner wurden gezeichnet (${hails})`);
+  assert.deepEqual([...blinkSolid].sort(), ['fest', 'warn', 'weg'], 'die Blinkwolke zeigt alle drei Zustände');
 });
 
 test('keine Gedankenstriche in den Texten der Datei', async () => {

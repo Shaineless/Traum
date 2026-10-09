@@ -8,7 +8,14 @@ import { initGenerator } from '../game/generator.js';
 import { stepSim } from '../game/sim.js';
 import { invariants } from './helpers.mjs';
 
-const CONTRACT = ['land', 'jump', 'doublejump', 'star', 'stomp', 'break', 'hurt', 'spark', 'shield', 'shieldbreak', 'gate', 'magnet', 'confetti', 'poof', 'dash', 'rain', 'windline', 'meteor'];
+const BASE = ['land', 'jump', 'doublejump', 'star', 'stomp', 'break', 'hurt', 'spark', 'shield', 'shieldbreak', 'gate', 'magnet', 'confetti', 'poof', 'dash', 'rain', 'windline', 'meteor'];
+const NEW = ['slam', 'spring', 'glide', 'throw', 'shotTrail', 'comet', 'hail', 'ice', 'blink', 'starcharge', 'combo', 'crit'];
+const CONTRACT = [...BASE, ...NEW];
+// Dauereffekte, die jeden Schritt oder Takt aufgerufen werden und darum klein sind (und bei vollem Speicher still bleiben)
+const SPARSE = ['magnet', 'rain', 'dash', 'windline', 'glide', 'shotTrail', 'combo', 'ice'];
+const AMBIENT_NAMES = ['rain', 'windline', 'magnet', 'glide', 'shotTrail', 'ice', 'combo'];
+// Große Wirkungseffekte dürfen mehr Partikel haben als die kleinen (Obergrenze pro Aufruf)
+const BIG = { stomp: 24, slam: 26, comet: 22, crit: 26, hail: 14, spring: 14, blink: 12, starcharge: 12, throw: 12 };
 const SHAPES = new Set(['dot', 'star', 'cloud', 'line', 'drop', 'ring']);
 const FIELDS = ['x', 'y', 'vx', 'vy', 'life', 'max', 'size', 'g', 'drag', 'rot', 'vr', 'alpha'];
 
@@ -45,10 +52,14 @@ test('die Anzahl pro Preset ist moderat', () => {
   for (const name of CONTRACT) {
     const s = fresh();
     const n = emit(s, name, 0, 0);
-    assert.ok(n <= 14, `${name}: ${n} Partikel`);
+    assert.ok(n <= (BIG[name] || 14), `${name}: ${n} Partikel`);
     // Dauerpresets (jeden Schritt oder Takt aufgerufen) dürfen kleiner sein
-    const sparse = ['magnet', 'rain', 'dash', 'windline'];
-    assert.ok(n >= (sparse.includes(name) ? 1 : 3), `${name}: nur ${n} Partikel`);
+    assert.ok(n >= (SPARSE.includes(name) ? 1 : 3), `${name}: nur ${n} Partikel`);
+  }
+  // Slam, Stomp, Komet und Crit sind kräftig
+  for (const name of ['slam', 'stomp', 'comet', 'crit']) {
+    const s = fresh();
+    assert.ok(emit(s, name, 0, 0) >= 16, `${name} soll kräftig sein`);
   }
 });
 
@@ -114,7 +125,7 @@ test('Stimmungseffekte drängen bei vollem Speicher keine anderen Effekte raus',
   const s = fresh();
   while (s.particles.length < LIMITS.MAX_PARTICLES) emit(s, 'confetti', 1, 1);
   const first = s.particles[0];
-  for (const name of ['rain', 'windline', 'magnet']) assert.equal(emit(s, name, 5, 5), 0, name);
+  for (const name of AMBIENT_NAMES) assert.equal(emit(s, name, 5, 5), 0, name);
   assert.equal(s.particles[0], first);
   assert.equal(s.particles.length, LIMITS.MAX_PARTICLES);
 });
@@ -290,4 +301,277 @@ test('ein langer Lauf mit dem echten Spiel hält das Limit ein', () => {
     assert.ok(s.particles.length <= LIMITS.MAX_PARTICLES);
   }
   assert.deepEqual(invariants(s), []);
+});
+
+// ---------- neue Presets ----------
+
+const emitted = (name, opts, x = 400, y = 300, s = fresh()) => {
+  emit(s, name, x, y, opts);
+  return s.particles;
+};
+const mean = (list, key) => list.reduce((a, p) => a + p[key], 0) / list.length;
+
+test('land: ohne strength wie bisher, mit strength mehr Staub und ein flacher Ring', () => {
+  const soft = emitted('land');
+  assert.equal(soft.length, 6);
+  assert.ok(soft.every((p) => p.shape === 'cloud'));
+  assert.equal(emitted('land', { strength: 0 }).length, 6, 'strength 0 ist die weiche Landung');
+  let last = 6;
+  for (const k of [0.25, 0.5, 0.75, 1]) {
+    const n = emitted('land', { strength: k }).length;
+    assert.ok(n >= last, `strength ${k}: ${n} nach ${last}`);
+    last = n;
+  }
+  const hard = emitted('land', { strength: 1 });
+  assert.ok(hard.length > 10 && hard.length <= 14, `${hard.length}`);
+  const ring = hard.filter((p) => p.shape === 'ring');
+  assert.equal(ring.length, 1);
+  assert.ok(ring[0].sq > 0 && ring[0].sq < 1, 'flacher Ring am Boden');
+  assert.ok(ring[0].grow > 100, 'der Ring breitet sich aus');
+  assert.ok(Math.max(...hard.map((p) => Math.abs(p.vx))) > Math.max(...soft.map((p) => Math.abs(p.vx))), 'harte Landung wirft den Staub weiter');
+  // ungültige Werte werden geklemmt oder ignoriert
+  assert.equal(emitted('land', { strength: 7 }).length, hard.length, 'über 1 zählt als 1');
+  assert.equal(emitted('land', { strength: -3 }).length, 6, 'unter 0 zählt als 0');
+  assert.equal(emitted('land', { strength: NaN }).length, 6);
+  assert.equal(emitted('land', { strength: 'stark' }).length, 6);
+});
+
+test('Ringe mit sq sind flache Ellipsen, sq liegt immer zwischen 0 und 1 und gehört nur zu Ringen', () => {
+  const s = fresh();
+  for (const name of CONTRACT) emit(s, name, 100, 100, { strength: 1, dir: 1 });
+  emit(s, 'blink', 100, 100, { dir: -1 });
+  const withSq = s.particles.filter((p) => p.sq !== undefined);
+  assert.ok(withSq.length >= 6, 'mehrere Presets legen Ringe flach');
+  for (const p of withSq) {
+    assert.equal(p.shape, 'ring');
+    assert.ok(p.sq > 0 && p.sq < 1, `sq ${p.sq}`);
+  }
+  assert.ok(s.particles.filter((p) => p.shape === 'ring' && p.sq === undefined).length >= 4, 'runde Ringe bleiben rund');
+});
+
+test('slam: Schockwelle als Ringe, Staub nach links und rechts, Funken nach oben', () => {
+  const list = emitted('slam');
+  assert.ok(list.length >= 18 && list.length <= BIG.slam, `${list.length}`);
+  const rings = list.filter((p) => p.shape === 'ring');
+  assert.ok(rings.length >= 2 && rings.every((p) => p.sq < 0.4 && p.grow > 150), 'flache, schnell wachsende Ringe');
+  const dust = list.filter((p) => p.shape === 'cloud');
+  assert.ok(dust.filter((p) => p.vx < -120).length >= 4 && dust.filter((p) => p.vx > 120).length >= 4, 'Staub in beide Richtungen');
+  assert.ok(dust.every((p) => p.size >= 8 && p.grow > 20), 'große weiche Wolken');
+  const sparks = list.filter((p) => p.shape === 'line' || p.shape === 'star');
+  assert.ok(sparks.filter((p) => p.vy < -100).length >= 4, 'Funken schießen nach oben');
+  // der Ring reicht etwa so weit wie die Schockwelle (SLAM.RADIUS 112)
+  const main = rings.reduce((a, p) => (p.grow * p.life > a.grow * a.life ? p : a));
+  assert.ok(main.size + main.grow * main.life > 100 && main.size + main.grow * main.life < 160);
+  assert.ok(list.length > emitted('land', { strength: 1 }).length, 'kräftiger als eine harte Landung');
+});
+
+test('stomp ist stärker als zuvor: mehr Fetzen, Funken, Strichfunken und ein Stoßring', () => {
+  const list = emitted('stomp');
+  assert.ok(list.length >= 18);
+  assert.ok(list.some((p) => p.shape === 'ring'));
+  assert.ok(list.filter((p) => p.shape === 'cloud').length >= 8);
+  assert.ok(list.filter((p) => p.shape === 'line').length >= 4);
+  assert.ok(list.filter((p) => p.shape === 'star').length >= 4);
+});
+
+test('spring: flache Ringe und Funken, die nach oben schießen', () => {
+  const list = emitted('spring');
+  const rings = list.filter((p) => p.shape === 'ring');
+  assert.equal(rings.length, 3, 'drei federnde Ringe');
+  assert.ok(rings.every((p) => p.sq < 1 && p.grow > 100));
+  assert.ok(rings[1].life > rings[0].life && rings[2].life > rings[1].life, 'nacheinander');
+  const up = list.filter((p) => (p.shape === 'star' || p.shape === 'line') && p.vy < -250);
+  assert.ok(up.length >= 5, `${up.length} schnelle Funken nach oben`);
+});
+
+test('glide: genau zwei weiche Wolkenpuffer, hinter Nimbus wenn dir gesetzt ist', () => {
+  assert.equal(emitted('glide').length, 2);
+  const behind = (dir) => {
+    const s = fresh();
+    for (let i = 0; i < 80; i++) emit(s, 'glide', 400, 300, { dir });
+    return mean(s.particles, 'vx');
+  };
+  assert.ok(behind(1) < -15, 'Flug nach rechts: Puffer bleiben links');
+  assert.ok(behind(-1) > 15, 'Flug nach links: Puffer bleiben rechts');
+  assert.ok(emitted('glide').every((p) => p.shape === 'cloud' && p.size < 7 && p.a0 <= 0.6), 'klein und blass');
+});
+
+test('throw: Sternchen und Strichfunken in Wurfrichtung', () => {
+  for (const dir of [1, -1]) {
+    const list = emitted('throw', { dir });
+    assert.ok(list.length >= 8 && list.length <= BIG.throw);
+    const fast = list.filter((p) => p.shape === 'star' || p.shape === 'line');
+    assert.ok(fast.every((p) => p.vx * dir > 50), `Richtung ${dir}`);
+    assert.ok(list.filter((p) => p.shape === 'line').every((p) => Math.abs(Math.cos(p.rot) * dir - 1) < 0.25), 'Striche zeigen in Wurfrichtung');
+    const puff = list.filter((p) => p.shape === 'cloud');
+    assert.ok(puff.length >= 1 && puff.every((p) => p.vx * dir < 0), 'Rückstoß Wölkchen fliegt nach hinten');
+  }
+});
+
+test('shotTrail: zwei kleine Funken, die hinter dem Stern zurückbleiben', () => {
+  assert.equal(emitted('shotTrail', { dir: 1 }).length, 2);
+  const s = fresh();
+  for (let i = 0; i < 100; i++) emit(s, 'shotTrail', 400, 300, { dir: 1 });
+  assert.ok(mean(s.particles, 'vx') < -3, 'bleibt hinter einem Stern zurück, der nach rechts fliegt');
+  const t = fresh();
+  for (let i = 0; i < 100; i++) emit(t, 'shotTrail', 400, 300, { dir: -1 });
+  assert.ok(mean(t.particles, 'vx') > 3);
+  assert.ok(s.particles.every((p) => p.size < 4 && p.life < 0.55), 'kurzlebig und klein');
+  assert.ok(s.particles.some((p) => p.glow === 1), 'leuchtet leicht');
+});
+
+test('comet: Glutringe, Glut mit Schwerkraft, Funken und dunkler Rauch', () => {
+  const list = emitted('comet');
+  assert.ok(list.length >= 16 && list.length <= BIG.comet);
+  const rings = list.filter((p) => p.shape === 'ring');
+  assert.equal(rings.length, 2);
+  assert.ok(rings.every((p) => p.sq < 0.5));
+  const embers = list.filter((p) => p.shape === 'dot');
+  assert.ok(embers.length >= 6 && embers.every((p) => p.g > 400 && p.vy < 0), 'Glut fliegt nach oben und fällt zurück');
+  assert.ok(list.filter((p) => p.shape === 'cloud').length >= 3, 'Rauch');
+  assert.ok(list.some((p) => p.shape === 'star' && p.glow === 1));
+  assert.ok(list.every((p) => p.life <= 1.4), 'vorbei in unter eineinhalb Sekunden');
+});
+
+test('hail: kleine Eissplitter in kühlen Farben, ein Schneepuff', () => {
+  const list = emitted('hail');
+  assert.ok(list.length >= 8 && list.length <= BIG.hail);
+  assert.ok(list.filter((p) => p.shape === 'line').length >= 5, 'Splitter');
+  const cold = (c) => { const n = parseInt(c.slice(5, 7), 16); const r = parseInt(c.slice(1, 3), 16); return n >= r; }; // Blau mindestens so stark wie Rot
+  assert.ok(list.every((p) => /^#[0-9a-f]{6}$/i.test(p.color) && cold(p.color)), 'alle Farben sind weiß bis eisblau');
+  assert.ok(list.some((p) => p.shape === 'cloud'), 'Schneepuff');
+  assert.ok(list.every((p) => p.life < 0.8), 'schnell vorbei');
+});
+
+test('ice: wenige kleine Eiskristall Sterne, die leicht schweben', () => {
+  const list = emitted('ice');
+  assert.ok(list.length >= 3 && list.length <= 6);
+  assert.ok(list.filter((p) => p.shape === 'star').length >= 3);
+  assert.ok(list.every((p) => p.size <= 4.2 && p.vy < 0), 'steigen leicht');
+});
+
+test('blink: Auftauchen dehnt sich aus, Verschwinden zieht sich zusammen', () => {
+  const appear = emitted('blink', { dir: 1 });
+  const vanish = emitted('blink', { dir: -1 });
+  for (const list of [appear, vanish]) {
+    assert.ok(list.length >= 8 && list.length <= BIG.blink);
+    assert.equal(list.filter((p) => p.shape === 'ring').length, 1);
+    assert.ok(list.filter((p) => p.shape === 'cloud').length >= 6);
+  }
+  assert.ok(appear.find((p) => p.shape === 'ring').grow > 0);
+  assert.ok(vanish.find((p) => p.shape === 'ring').grow < 0, 'der Ring schrumpft');
+  // Beim Verschwinden zeigen die Staubwolken zur Mitte, beim Auftauchen sind sie zufällig verteilt
+  const inward = vanish.filter((p) => p.shape === 'cloud').every((p) => (p.x - 400) * p.vx < 0);
+  assert.ok(inward, 'Staub fließt nach innen');
+  for (const p of vanish) assert.ok(p.size > 0);
+  // Ohne dir: wie Auftauchen
+  assert.ok(emitted('blink').find((p) => p.shape === 'ring').grow > 0);
+});
+
+test('starcharge: Ringe ziehen sich zusammen, goldenes Aufleuchten in der Mitte', () => {
+  const list = emitted('starcharge');
+  assert.ok(list.length >= 8 && list.length <= BIG.starcharge);
+  const rings = list.filter((p) => p.shape === 'ring');
+  assert.equal(rings.length, 2);
+  assert.ok(rings.every((p) => p.grow < 0 && p.size + p.grow * p.life > 0), 'schrumpfen, ohne negativ zu werden');
+  const flash = list.find((p) => p.shape === 'star' && p.size >= 6);
+  assert.ok(flash && flash.glow === 1 && flash.x === 400 && flash.y === 300, 'großer leuchtender Stern im Zentrum');
+});
+
+test('combo: zwei Sterne, bei strength über 0,66 drei, sie bleiben hinter Nimbus zurück', () => {
+  assert.equal(emitted('combo').length, 2);
+  assert.equal(emitted('combo', { strength: 0.5 }).length, 2);
+  assert.equal(emitted('combo', { strength: 1 }).length, 3);
+  const s = fresh();
+  for (let i = 0; i < 100; i++) emit(s, 'combo', 400, 300, { dir: 1 });
+  assert.ok(mean(s.particles, 'vx') < -20);
+  assert.ok(s.particles.every((p) => p.shape === 'star' && p.glow === 1));
+  const colors = new Set(s.particles.map((p) => p.color));
+  assert.ok(colors.size >= 3, 'bunt: Gold, Rosa, Weiß');
+});
+
+test('crit: Ringe, Sterne und Strichfunken, ab strength 0,5 drei Ringe', () => {
+  const full = emitted('crit');
+  assert.ok(full.length >= 20 && full.length <= BIG.crit, `${full.length}`);
+  assert.equal(full.filter((p) => p.shape === 'ring').length, 3);
+  assert.ok(full.filter((p) => p.shape === 'star').length >= 8);
+  assert.ok(full.filter((p) => p.shape === 'line').length >= 5);
+  assert.equal(emitted('crit', { strength: 0.3 }).filter((p) => p.shape === 'ring').length, 2);
+  assert.equal(emitted('crit', { strength: 0.51 }).filter((p) => p.shape === 'ring').length, 3);
+  assert.ok(full.filter((p) => p.shape === 'ring').every((p) => p.sq === undefined), 'runde Ringe');
+  assert.ok(full.every((p) => p.life < 1.3));
+});
+
+test('bei vollem Speicher werden die Hauptringe der großen Effekte nie ausgedünnt', () => {
+  for (const name of ['slam', 'comet', 'crit', 'spring', 'starcharge', 'blink']) {
+    let rings = 0;
+    for (let trial = 0; trial < 20; trial++) {
+      const s = fresh(trial + 1);
+      while (s.particles.length < Math.ceil(LIMITS.MAX_PARTICLES * 0.8)) emit(s, 'confetti', 1, 1);
+      const before = s.particles.length;
+      const n = emit(s, name, 500, 500);
+      assert.ok(s.particles.length <= LIMITS.MAX_PARTICLES);
+      const fresh_ = s.particles.slice(-n);
+      assert.ok(fresh_.some((p) => p.shape === 'ring'), `${name}: der Hauptring fehlt (Versuch ${trial})`);
+      rings++;
+      assert.ok(n >= 1 && s.particles.length >= before - n);
+    }
+    assert.equal(rings, 20);
+  }
+  // Der Rest wird bei vollem Speicher dünner: im Mittel weniger Partikel als bei leerem Speicher
+  const avg = (fill) => {
+    let sum = 0;
+    for (let trial = 0; trial < 30; trial++) {
+      const s = fresh(trial + 5);
+      while (s.particles.length < fill) emit(s, 'confetti', 1, 1);
+      sum += emit(s, 'slam', 500, 500);
+    }
+    return sum / 30;
+  };
+  assert.ok(avg(Math.ceil(LIMITS.MAX_PARTICLES * 0.8)) < avg(0) - 4, 'dünner bei vollem Speicher');
+});
+
+test('neue Presets mit wilden Optionen bleiben endlich und im Limit', () => {
+  const s = fresh();
+  const wild = [undefined, null, {}, { dir: NaN }, { dir: -Infinity }, { strength: NaN }, { strength: -5 }, { strength: 1e9 }, { color: '' }, { color: 7 }, { dir: 'x', strength: 'y' }, { color: '#123456', dir: -1, strength: 0.5 }];
+  for (let round = 0; round < 40; round++) {
+    for (const name of NEW) {
+      for (const o of wild) emit(s, name, round * 7, 100 + round, o);
+      assert.ok(s.particles.length <= LIMITS.MAX_PARTICLES);
+    }
+    updateParticles(s, STEP);
+  }
+  assert.ok(s.particles.every(allFinite));
+  assert.ok(s.particles.every((p) => p.size >= 0 && p.alpha >= 0 && p.alpha <= 1));
+});
+
+test('alle neuen Presets sind deterministisch und verändern s.rng nie', () => {
+  const run = () => {
+    const s = fresh(42);
+    const rng = s.rng;
+    for (const name of NEW) emit(s, name, 123, 45, { dir: -1, strength: 0.8 });
+    simulate(s, 0.3);
+    assert.equal(s.rng, rng);
+    return s;
+  };
+  const a = run();
+  const b = run();
+  assert.deepEqual(a.particles, b.particles);
+  assert.equal(a.particleSeq, b.particleSeq);
+});
+
+test('opts.color färbt auch die neuen Presets überwiegend', () => {
+  for (const name of ['throw', 'spring', 'crit', 'blink', 'starcharge', 'hail', 'ice']) {
+    const s = fresh();
+    for (let i = 0; i < 8; i++) emit(s, name, 0, 0, { color: '#123456' });
+    const own = s.particles.filter((p) => p.color === '#123456').length;
+    assert.ok(own >= s.particles.length * 0.5, `${name}: ${own} von ${s.particles.length}`);
+  }
+});
+
+test('Stimmungs Presets bleiben bei vollem Speicher still, Wirkungs Presets nicht', () => {
+  const s = fresh();
+  while (s.particles.length < Math.ceil(LIMITS.MAX_PARTICLES * 0.85)) emit(s, 'confetti', 1, 1);
+  for (const name of AMBIENT_NAMES) assert.equal(emit(s, name, 0, 0), 0, name);
+  for (const name of ['slam', 'crit', 'comet', 'hail', 'throw', 'spring', 'blink', 'starcharge']) assert.ok(emit(s, name, 0, 0) > 0, name);
 });

@@ -17,6 +17,8 @@ const ROLES = {
   right: ['ArrowRight', 'KeyD'],
   jump: ['Space', 'ArrowUp', 'KeyW'],
   dash: ['ShiftLeft', 'ShiftRight', 'KeyX', 'KeyK'],
+  slam: ['ArrowDown', 'KeyS'], // Stampfen
+  throw: ['KeyJ', 'KeyF', 'KeyZ', 'KeyC'], // Sternenwurf
   start: ['Enter'], // Enter startet nur, springt aber nicht
   pause: ['KeyP', 'Escape'],
   debug: ['F3'],
@@ -60,6 +62,8 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
   const pointers = new Map(); // pointerId -> Fläche ('left', 'right', 'jump', 'dash', 'pause') oder null
   let jumpAt = null; // Zeitpunkt der letzten Sprung Flanke, null wenn keine offen ist
   let dashAt = null;
+  let slamAt = null;
+  let throwAt = null;
   let touchSeen = false;
   let dead = false;
   const diag = { last: '', lastAt: 0, jumpDowns: 0, jumpTaken: 0 }; // nur für die Debug Anzeige
@@ -84,6 +88,8 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
     pointers.clear();
     jumpAt = null;
     dashAt = null;
+    slamAt = null;
+    throwAt = null;
   }
 
   // ---------- Tastatur ----------
@@ -131,6 +137,8 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
       jumpAt = now();
       diag.jumpDowns++;
     } else if (role === 'dash') dashAt = now();
+    else if (role === 'slam') slamAt = now();
+    else if (role === 'throw') throwAt = now();
     onAction('press');
   }
 
@@ -227,15 +235,19 @@ export function createInput(canvas, { onAction = () => {}, onTouch = () => {}, n
       const jumpPressed = jumpAt !== null && t - jumpAt <= FLANK_MAX_AGE;
       if (jumpPressed) diag.jumpTaken++;
       const dashPressed = dashAt !== null && t - dashAt <= FLANK_MAX_AGE;
+      const slamPressed = slamAt !== null && t - slamAt <= FLANK_MAX_AGE;
+      const throwPressed = throwAt !== null && t - throwAt <= FLANK_MAX_AGE;
       jumpAt = null;
       dashAt = null;
-      if (dead) return { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false };
+      slamAt = null;
+      throwAt = null;
+      if (dead) return { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false };
       const z = zonesHeld();
       const l = heldKey('left') || z.left;
       const r = heldKey('right') || z.right;
       // Ein Tipp, der zwischen zwei Bildern endet, zählt trotzdem als ein Bild gehalten
       const jumpHeld = heldKey('jump') || z.jump || jumpPressed;
-      return { move: (r ? 1 : 0) - (l ? 1 : 0), jumpPressed, jumpHeld, dashPressed };
+      return { move: (r ? 1 : 0) - (l ? 1 : 0), jumpPressed, jumpHeld, dashPressed, slamPressed, throwPressed, downHeld: heldKey('slam') };
     },
     // Welche Touch Flächen gerade gedrückt sind, für die Darstellung: { left, right, jump, dash }
     held: () => zonesHeld(),

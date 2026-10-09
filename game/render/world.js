@@ -147,7 +147,6 @@ const mkSpBody = (ctx) => vertical(ctx, 0, 16, [0, C.spTop, 0.4, C.spMid, 1, C.s
 const mkSpGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,178,128,0.75)', 0.5, 'rgba(255,140,100,0.28)', 1, 'rgba(255,140,100,0)']);
 const mkIceBody = (ctx) => vertical(ctx, 0, 16, [0, C.iceTop, 0.38, C.iceMid, 1, C.iceBot]);
 const mkIceGround = (ctx) => vertical(ctx, 0, 240, [0, C.iceTop, 0.07, C.iceMid, 0.5, '#8fbdf0', 1, '#456eb8']);
-const mkIceMist = (ctx) => unitRadial(ctx, [0, 'rgba(238,250,255,0.55)', 0.6, 'rgba(220,242,255,0.2)', 1, 'rgba(220,242,255,0)']);
 const mkBlBody = (ctx) => vertical(ctx, 0, 16, [0, C.blTop, 0.42, C.blMid, 1, C.blBot]);
 const mkCmGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,196,120,0.85)', 0.45, 'rgba(255,128,70,0.34)', 1, 'rgba(255,100,60,0)']);
 const mkCmHalo = (ctx) => unitRadial(ctx, [0, 'rgba(255,250,226,1)', 0.22, 'rgba(255,224,150,0.85)', 0.55, 'rgba(255,150,72,0.34)', 1, 'rgba(255,110,56,0)']);

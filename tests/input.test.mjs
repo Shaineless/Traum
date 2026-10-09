@@ -156,12 +156,12 @@ test('Sprung: Flanke gilt genau bis zum nächsten poll, Halten bleibt', () => {
   const env = setup();
   env.doc.activeElement = env.canvas;
   down(env, 'Space');
-  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: true, jumpHeld: true, dashPressed: false });
-  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: false, jumpHeld: true, dashPressed: false });
+  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: true, jumpHeld: true, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false });
+  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: false, jumpHeld: true, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false });
   down(env, 'Space', { repeat: true });
   assert.equal(env.input.poll().jumpPressed, false, 'Tastenwiederholung ist keine neue Flanke');
   up(env, 'Space');
-  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false });
+  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false });
 });
 
 test('Sprungtasten: Space, ArrowUp und KeyW springen, Enter nur als Start', () => {
@@ -232,7 +232,7 @@ test('onAction: press für Spieltasten (einmal pro Druck), pause, debug, sonst n
   down(env, 'F3');
   assert.deepEqual(env.actions, ['pause', 'pause', 'debug']);
   env.actions.length = 0;
-  down(env, 'KeyZ');
+  down(env, 'KeyQ');
   down(env, 'Tab');
   assert.deepEqual(env.actions, []);
   assert.equal(env.input.poll().move, 1);
@@ -282,7 +282,7 @@ test('Fokusverlust und blur räumen alle gedrückten Tasten auf', () => {
   touchDown(env, 'right');
   env.win.dispatch('blur');
   p = env.input.poll();
-  assert.deepEqual(p, { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false });
+  assert.deepEqual(p, { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false });
   assert.deepEqual(env.input.held(), { left: false, right: false, jump: false, dash: false });
 });
 
@@ -322,7 +322,7 @@ test('destroy entfernt alle Listener und macht poll neutral', () => {
   down(env, 'ArrowRight');
   touchDown(env, 'right');
   assert.equal(env.actions.length, before);
-  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false });
+  assert.deepEqual(env.input.poll(), { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false, slamPressed: false, throwPressed: false, downHeld: false });
   env.input.destroy(); // zweimal ist harmlos
 });
 
@@ -538,4 +538,37 @@ test('diag zählt Sprungtasten und zeigt gedrückte Tasten', () => {
   assert.equal(d.jumpDowns, 1);
   assert.equal(d.jumpTaken, 1);
   assert.equal(d.last, 'Space');
+});
+
+// ---------- Stampfen und Sternenwurf ----------
+
+test('Pfeil nach unten und S lösen Stampfen aus, J F Z C den Sternenwurf', () => {
+  const env = setup();
+  env.doc.activeElement = env.canvas;
+  down(env, 'ArrowDown');
+  let p = env.input.poll();
+  assert.equal(p.slamPressed, true);
+  assert.equal(p.downHeld, true);
+  up(env, 'ArrowDown');
+  down(env, 'KeyS');
+  assert.equal(env.input.poll().slamPressed, true);
+  up(env, 'KeyS');
+  for (const code of ['KeyJ', 'KeyF', 'KeyZ', 'KeyC']) {
+    down(env, code);
+    p = env.input.poll();
+    assert.equal(p.throwPressed, true, code);
+    up(env, code);
+  }
+  assert.equal(env.input.poll().throwPressed, false);
+});
+
+test('Stampfen und Wurf sind Flanken: Halten löst nicht erneut aus', () => {
+  const env = setup();
+  env.doc.activeElement = env.canvas;
+  down(env, 'KeyS');
+  assert.equal(env.input.poll().slamPressed, true);
+  down(env, 'KeyS', { repeat: true });
+  const p = env.input.poll();
+  assert.equal(p.slamPressed, false);
+  assert.equal(p.downHeld, true);
 });

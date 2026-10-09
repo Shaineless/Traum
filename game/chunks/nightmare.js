@@ -305,10 +305,10 @@ export const NIGHTMARE = [
       for (let i = 0; i < 2; i++) {
         const ny = clamp(y + b.pick([-14, -7, 0, 7, 14]), -22, 22);
         const gap = gapFor(b, y, ny, b.rand(0.8, 0.9) + 0.04 * k);
-        const w = b.int(310, 330);
+        const w = b.int(320, 336);
         const p = b.cloud(x + gap, ny, w);
-        const from = b.int(122, 134);
-        guard(b, 'charger', p, from, from + b.int(130, 146), { dir: i % 2 === 0 ? -1 : 1 });
+        const from = b.int(112, 124);
+        guard(b, 'charger', p, from, from + b.int(122, 136), { dir: i % 2 === 0 ? -1 : 1 });
         gapArc(b, x, y, x + gap, ny, 2);
         b.starLine(x + gap + 36, ny - 42, x + gap + from - 20, ny - 42, 2);
         b.starArc(x + gap + from, x + gap + from + 140, ny - 30, 96, 4);
@@ -360,22 +360,23 @@ export const NIGHTMARE = [
         const nw = i === 2 ? b.int(250, 270) : b.int(150, 162) - Math.round(6 * k);
         const node = i === 2 ? b.ground(sx + sw + dgap, ny, nw) : b.cloud(sx + sw + dgap, ny, nw);
         springTrail(b, sx + sw / 2, y, PHYS.MOVE_SPEED, 4, 0.2, 0.8);
-        flights.push(sx + sw / 2 + (sw / 2 + dgap) * 0.62);
+        flights.push(sx + sw / 2 + (sw / 2 + dgap) * 0.75);
         route.push(node);
         x = sx + sw + dgap + nw;
         y = ny;
       }
       b.starsOver(route[route.length - 1], 3, 42, 30);
       // Flieger über der zweiten und dritten Flugbahn, gegenläufig
-      flyerAbove(b, flights[1], { range: 100, dir: 1, phase: 0 });
-      flyerAbove(b, flights[2], { range: 100, dir: -1, phase: Math.PI });
+      flyerAbove(b, flights[1], { range: 60, dir: 1, phase: 0 });
+      flyerAbove(b, flights[2], { range: 60, dir: -1, phase: Math.PI });
       b.route(...route);
     },
   },
 
   // Regenbogen Strecke: gleich am Anfang liegt ein Regenbogen Dash. Danach reihen sich Wolken mit Gewitterwolken und
   // Stachelwolken, zum Schluss steht eine Wiese voll dicht an dicht patrouillierender Gewitterwolken. Mit dem Dash fegt der
-  // Spieler über Lücken und durch alle Gegner einer Reihe. Ohne ihn geht es mit Springen, Stampfen und Doppelsprung.
+  // Spieler über Lücken und durch ein bis zwei Gegner der Reihe, bevor die Abklingzeit ihn wieder springen lässt. Ohne ihn geht
+  // es mit Springen, Stampfen und Doppelsprung.
   {
     id: 'rainbow-dash-run',
     name: 'Regenbogen Strecke',
@@ -388,7 +389,7 @@ export const NIGHTMARE = [
     build(b) {
       const k = ramp(b, 1900);
       const a = b.ground(0, 0, b.int(280, 300));
-      b.powerup('dash', 150, -46);
+      b.powerup('dash', 150, -40);
       b.starLine(190, -42, a.w - 40, -42, 3);
       const route = [a];
       const plan = b.pick([['walker', 'spike', 'walker'], ['spike', 'walker', 'spike']]);
@@ -469,9 +470,10 @@ export const NIGHTMARE = [
   },
 
   // Sturzflug Schacht: oben führt eine Treppe aus drei Wolken über den Schacht. Unten liegt ein langer Boden, auf dem unter der
-  // höchsten Wolke zwei Gewitterwolken und ein Hüpfer dicht beieinander wachen. Die Hauptroute bleibt oben und braucht nur
-  // Sprung und Doppelsprung. Wer auf der höchsten Wolke hochspringt und im Fallen stampft, landet mitten unter den Wächtern,
-  // und die Schockwelle räumt alle in Reichweite ab. Der Boden endet kurz vor dem Ausstieg: wer hinunterfällt, klettert wieder hoch.
+  // höchsten Wolke zwei Gewitterwolken und ein Hüpfer nebeneinander wachen. Die Hauptroute bleibt oben und braucht nur
+  // Sprung und Doppelsprung. Wer neben der höchsten Wolke in den Schacht springt und im Fallen stampft, räumt mit der
+  // Schockwelle die Wächter in Reichweite ab und läuft unten weiter. Der Boden endet kurz vor dem Ausstieg: wer hinunterfällt,
+  // klettert wieder hoch.
   {
     id: 'slam-shaft',
     name: 'Sturzflug Schacht',
@@ -511,11 +513,13 @@ export const NIGHTMARE = [
       const lx = a.w + 30;
       const lw = exit.x - b.ox - 40 - lx;
       const low = b.ground(lx, 66, lw);
-      // Wächter dicht beieinander unter der höchsten Wolke: zwei Gewitterwolken, dann der Hüpfer (Abstände wie validate.js sie fordert)
+      // Wächter unter der höchsten Wolke: Gewitterwolke, Hüpfer, Gewitterwolke, je 44 px Abstand wie validate.js ihn fordert.
+      // Wer links oder rechts von der höchsten Wolke in den Schacht fällt, trifft mit der Schockwelle (Radius 112) die nahe
+      // Gewitterwolke und den Hüpfer, die ferne bleibt für einen Stampfer oder Sprung übrig.
       const mid = tops[1].x - b.ox + tops[1].w / 2 - lx;
-      guard(b, 'walker', low, mid - 112, mid - 52, { dir: -1 });
-      guard(b, 'walker', low, mid - 92, mid - 32, { dir: 1 });
-      guard(b, 'jumper', low, mid + 8, mid + 98);
+      guard(b, 'walker', low, mid - 144, mid - 84, { dir: -1 });
+      guard(b, 'jumper', low, mid - 40, mid + 40);
+      guard(b, 'walker', low, mid + 84, mid + 144, { dir: 1 });
       b.starLine(lx + 40, 66 - 42, lx + lw - 40, 66 - 42, 6);
       b.route(...route);
     },
@@ -523,7 +527,8 @@ export const NIGHTMARE = [
 
   // Wurfstern Galerie: eine Sprungwolke wirft den Spieler auf eine lange Wiese, über der eine Reihe Flieger in
   // Doppelsprunghöhe schwebt, dazwischen zwei Hagelwolken. Stachelwolken am Boden halten den Spieler in Bewegung. Wer Sterne
-  // sammelt, lädt Wurfsterne und räumt die Reihe aus der Luft ab (Combo). Wer unten bleibt, läuft unter ihnen durch.
+  // sammelt, lädt Wurfsterne und holt aus dem Doppelsprung links vor der Reihe je Sprung ein bis zwei Wolken herunter (Combo).
+  // Wer unten bleibt, läuft unter ihnen durch, denn ein einfacher Sprung reicht nicht an sie heran.
   {
     id: 'shuriken-gallery',
     name: 'Wurfstern Galerie',
@@ -542,26 +547,26 @@ export const NIGHTMARE = [
       const sp = b.spring(a.w + sgap, 0, sw);
       const dgap = springGap(b, 0, b.rand(0.66, 0.78) + 0.04 * k);
       const lx = a.w + sgap + sw + dgap;
-      const lw = b.int(760, 800);
+      const lw = b.int(830, 850);
       const lane = b.ground(lx, 0, lw);
       springTrail(b, a.w + sgap + sw / 2, 0, PHYS.MOVE_SPEED, 5, 0.2, 0.82);
-      // Zwei Stachelwolken am Boden, Platz zum Landen davor
-      spikeAt(b, lane, b.int(150, 170));
-      spikeAt(b, lane, b.int(480, 520));
+      // Zwei Stachelwolken am Boden, Platz zum Landen davor. Ein Sternbogen zeigt jeden Sprung.
+      const s1 = spikeAt(b, lane, b.int(150, 170));
+      const s2 = spikeAt(b, lane, b.int(450, 470));
+      for (const sk of [s1, s2]) b.starArc(sk.x - b.ox - 22, sk.x - b.ox + sk.w + 22, -30, 64, 3);
       const exit = b.ground(lx + lw + gapFor(b, 0, 0, b.rand(0.8, 0.9)), 0, b.int(250, 270));
       gapArc(b, lx + lw, 0, exit.x - b.ox, 0, 2);
       b.starsOver(exit, 3, 42, 30);
-      b.starLine(lx + 36, -42, lx + 120, -42, 2);
       // Fliegerreihe in Doppelsprunghöhe, Hagelwolken dazwischen (ihre Zonen halten Abstand zu den Stachelwolken)
-      const f0 = lx + b.int(236, 252);
-      const step = b.int(112, 124);
+      const f0 = lx + b.int(216, 228);
+      const step = b.int(106, 116);
+      b.starLine(f0 - 20, -42, f0 + step * 5 + 20, -42, 6); // Sterne am Boden unter der Reihe laden die Wurfsterne
       flyerAbove(b, f0, { range: 70, dir: 1, lift: 192, star: false });
       hailAbove(b, f0 + step, { range: 60, dir: -1, phase: 0.2, lift: 196, star: false });
       flyerAbove(b, f0 + step * 2, { range: 70, dir: -1, lift: 206, phase: Math.PI, star: false });
       flyerAbove(b, f0 + step * 3, { range: 70, dir: 1, lift: 192, star: false });
       hailAbove(b, f0 + step * 4, { range: 60, dir: 1, phase: 0.6, lift: 196, star: false });
       flyerAbove(b, f0 + step * 5, { range: 70, dir: -1, lift: 202, phase: 1.5, star: false });
-      b.starArc(f0 - 30, f0 + step * 5 + 30, -200, 40, 5);
       b.route(a, sp, lane, exit);
     },
   },
@@ -621,8 +626,8 @@ export const NIGHTMARE = [
   },
 
   // Fähre und Hüpfer: zwei schwingende Wolken tragen über breite Lücken. Dazwischen liegen Inseln, auf der ersten wacht ein
-  // Hüpfer, auf der zweiten steht eine Stachelwolke. Die Fähren sind schnell, ihre Lücken nur in einer Hälfte des Takts
-  // überspringbar: wer wartet, bis die Fähre nah ist, springt sicher, wer hetzt, fällt in den Abgrund.
+  // Hüpfer, auf der zweiten steht eine Stachelwolke. Die Fähren sind schnell, und jede Lücke ist nur in knapp der Hälfte des
+  // Takts überspringbar: wer wartet, bis die Fähre nah ist, springt sicher, wer hetzt, fällt in den Abgrund.
   {
     id: 'ferry-hopper',
     name: 'Fähre und Hüpfer',
@@ -639,31 +644,36 @@ export const NIGHTMARE = [
       const route = [a];
       let x = a.w; // rechte Kante der letzten festen Plattform, bei einer Fähre ihre linke Stellung
       let y = 0;
-      // Fähre: in der weitesten Stellung liegt die Lücke knapp über dem sicheren Limit (nur mit Warten), in der nächsten bleiben 24 px
+      let swing = 0; // Ausschlag der letzten Fähre
+      // Lücke, die in der fernen Stellung der Fähre um etwa einen Ausschlag über dem sicheren Limit liegt und in der nahen
+      // Stellung (2 Ausschläge näher) bequem ist
+      const farGap = (dy, ax) => gapFor(b, y, y + dy, 1, 0) + Math.round(ax * b.rand(0.8, 1.0));
       const ferry = (dy) => {
         const wh = b.int(110, 122);
-        const far = gapFor(b, y, y + dy, b.rand(1.0, 1.08), 0);
-        const axh = Math.floor(Math.min(b.int(54, 64), (far - 24) / 2));
+        const axh = b.int(52, 62);
+        const far = farGap(dy, axh);
         const cx = x + far - axh;
         const f = b.moving(cx, y + dy, wh, { ax: axh, period: b.rand(3.0, 3.5) - 0.4 * k, phase: b.rand(0, TAU) });
         b.starArc(cx - axh, cx + axh + wh, y + dy - 34, 50, 4);
         route.push(f);
         x = cx - axh + wh;
         y += dy;
+        swing = axh;
       };
       // Insel hinter einer Fähre: die Lücke wird von deren linker Stellung aus gerechnet, also bei der Rückkehr der Fähre kürzer
       const island = (dy, w) => {
-        const gap = gapFor(b, y, y + dy, b.rand(1.0, 1.08), 0);
+        const gap = farGap(dy, swing);
         const p = b.cloud(x + gap, y + dy, w);
         route.push(p);
         x += gap + w;
         y += dy;
+        swing = 0;
         return p;
       };
       // Fähre 1, Insel mit Hüpfer
       ferry(b.pick([-8, 0, 8]));
       const i1 = island(b.pick([-6, 0, 6]), b.int(244, 262));
-      guard(b, 'jumper', i1, 84, 84 + 126);
+      guard(b, 'jumper', i1, 80, 80 + 104);
       b.starArc(i1.x - b.ox + 90, i1.x - b.ox + 210, i1.y - b.oy - 30, 90, 4);
       // Fähre 2, Insel mit Stachelwolke
       ferry(b.pick([-14, -6, 6, 14]));
@@ -821,9 +831,10 @@ export const NIGHTMARE = [
     },
   },
 
-  // Gewitterlauf: auf einer langen, nassen Wiese schlagen zwei Blitze ein, dazwischen wacht eine Sturmwolke. Der Regen macht
-  // das Bremsen träge, darum lohnt es sich, früh abzuwarten. Eine Terrasse über der Sturmwolke ist außer Sichtweite und
-  // trägt Sterne. Die Zeitpunkte der Blitze sind versetzt, nie steht der Spieler unvorbereitet in der Zone.
+  // Gewitterlauf: auf einer langen Wiese schlagen drei Blitze ein, zwischen dem ersten und zweiten wacht eine Sturmwolke. Der
+  // Regen setzt erst nach der trockenen Landezone ein und macht das Bremsen träge, darum lohnt es sich, früh abzuwarten. Eine
+  // Terrasse über der Sturmwolke ist außer Sichtweite und trägt Sterne. Die Blitze schlagen zeitlich versetzt ein, und vor dem
+  // ersten bleibt genug Platz, um auch auf nassem Boden noch zu bremsen.
   {
     id: 'thunder-rain-run',
     name: 'Gewitterlauf',
@@ -839,10 +850,10 @@ export const NIGHTMARE = [
       b.starsOver(a, 2, 42, 30);
       const gap = gapFor(b, 0, 0, b.rand(0.8, 0.9));
       const rx = a.w + gap;
-      const w = b.int(900, 940);
+      const w = b.int(990, 1020);
       const run = b.ground(rx, 0, w);
       gapArc(b, a.w, 0, rx, 0, 2);
-      const l1 = rx + b.int(150, 170);
+      const l1 = rx + b.int(230, 250); // vor dem ersten Blitz reicht der Platz zum Bremsen (auf nassem Boden gut 80 px)
       const cz = l1 + b.int(120, 136); // Beginn der Zone der Sturmwolke
       const cs = b.int(140, 156);
       const l2 = cz + cs + b.int(120, 136);
@@ -852,8 +863,8 @@ export const NIGHTMARE = [
       b.lightning(l2, { idle: idle + b.rand(1.2, 1.7) });
       b.lightning(l3, { idle: idle + b.rand(0.5, 0.9) });
       guard(b, 'charger', run, cz - rx, cz - rx + cs, { dir: -1 });
-      b.rain(rx + 10, 520, { offset: b.rand(3.6, 5.8) });
-      b.rain(rx + 470, 480, { offset: b.rand(0.5, 2.4) });
+      b.rain(rx + 170, 520, { offset: b.rand(3.6, 5.8) }); // die ersten 170 px der Wiese bleiben trocken
+      b.rain(rx + 520, w - 590, { offset: b.rand(0.5, 2.4) }); // endet 70 px vor dem Absprung zum Ausstieg
       // Terrasse über der Sturmwolke
       const tw = b.int(110, 124) - Math.round(8 * k);
       const terrace = b.cloud(cz + cs / 2 - tw / 2, -b.int(92, 100), tw);
@@ -981,9 +992,10 @@ export const NIGHTMARE = [
     },
   },
 
-  // Abgrundsprint: fünf schmale Wolken über einem Abgrund, abwechselnd mit einem einfachen Sprung am Limit und einem
-  // Doppelsprung über eine breite Lücke. In den breiten Lücken hängen Risikosterne, über den kurzen kreisen Flieger. Ohne
-  // Gegner am Boden, ohne Wiese: reine Sprungkunst. Die Sterne zeigen die Bahn, das Gleiten rettet knappe Landungen.
+  // Abgrundsprint: fünf schmale Wolken über einem Abgrund, abwechselnd mit einem einfachen Sprung nahe am Limit und einem
+  // Doppelsprung über eine breite Lücke, die der einfache Sprung nicht schafft. In den breiten Lücken hängen Risikosterne, über
+  // den kurzen kreisen Flieger. Ohne Gegner am Boden, ohne Wiese: reine Sprungkunst. Die Sterne zeigen die Bahn, das Gleiten
+  // rettet knappe Landungen.
   {
     id: 'abyss-sprint',
     name: 'Abgrundsprint',
@@ -1007,7 +1019,7 @@ export const NIGHTMARE = [
         // Doppelsprung Lücken liegen waagerecht oder abwärts: nur dann rechnet reach.js den zweiten Sprung ein, und die Lücke
         // übersteigt den einfachen Sprung deutlich (mindestens 10 Prozent über seiner Reichweite)
         const ny = clamp(y + (dbl ? b.pick([0, 12, 24]) : b.pick([-30, -16, 0, 14, 28])), -44, 32);
-        const frac = dbl ? b.rand(0.84, 0.9) + 0.02 * k : b.rand(0.84, 0.92);
+        const frac = dbl ? b.rand(0.84, 0.9) + 0.02 * k : b.rand(0.94, 1.02);
         const gap = gapFor(b, y, ny, frac, STORM, dbl);
         const w = b.int(88, 98) - Math.round(4 * k);
         const p = b.cloud(x + gap, ny, w);
@@ -1103,7 +1115,7 @@ export const NIGHTMARE = [
       b.starsOver(a, 2, 42, 30);
       const gap = gapFor(b, 0, 0, b.rand(0.82, 0.9));
       const ax = a.w + gap;
-      const w = b.int(880, 910);
+      const w = b.int(960, 980);
       const arena = b.ground(ax, 0, w);
       gapArc(b, a.w, 0, ax, 0, 2);
       const c1 = ax + b.int(120, 134);
