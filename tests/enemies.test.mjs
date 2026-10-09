@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ENEMY, PHYS, STEP } from '../game/constants.js';
-import { createCharger, createFlyer, createJumper, createStaticPlatform, createWalker } from '../game/entities.js';
+import { ABILITY, ENEMY, LIMITS, PHYS, STEP } from '../game/constants.js';
+import { createCharger, createFlyer, createHailcloud, createJumper, createStaticPlatform, createWalker } from '../game/entities.js';
 import { createState } from '../game/state.js';
 import { int, range, seedRng } from '../game/rng.js';
 import { emit } from '../game/particles.js';
 import { hurtPlayer, updatePlayer } from '../game/player.js';
-import { DEAD_TIME, clearEnemiesNear, enemyHitbox, playerHitbox, playerVsEnemies, updateEnemies } from '../game/enemies.js';
+import { DEAD_TIME, clearEnemiesNear, damageEnemy, enemyHitbox, playerHitbox, playerVsEnemies, updateEnemies } from '../game/enemies.js';
 import { input, newGame, run } from './helpers.mjs';
 
 // ---------- Hilfen ----------
@@ -744,6 +744,371 @@ test('Echter Dash besiegt einen Walker im Weg ohne Schaden', () => {
   assert.equal(s.run.kills, 1);
 });
 
+// ---------- damageEnemy ----------
+
+const sfxOf = (s, name) => s.sfx.filter((x) => x.n === name).length;
+// Rauchwolken des Presets poof (wachsen schnell, anders als die Fetzen des Presets stomp)
+const poofClouds = (s) => s.particles.filter((q) => q.shape === 'cloud' && q.grow >= 18).length;
+
+test('damageEnemy besiegt einen lebenden Gegner wie ein Stomp und gibt true zurück', () => {
+  for (const how of ['dash', 'slam', 'shot']) {
+    const { s, e } = walkerScene();
+    e.telegraph = 0.5;
+    e.vx = 55;
+    const p = s.player;
+    const vy = p.vy;
+    assert.equal(damageEnemy(s, e, how), true, how);
+    assert.equal(e.dead, 0.001, how);
+    assert.equal(e.state, 'dead');
+    assert.equal(e.telegraph, 0);
+    assert.equal(e.vx, 0);
+    assert.equal(s.run.kills, 1);
+    assert.equal(s.run.bonus, 25);
+    assert.equal(s.combo.count, 1);
+    assert.equal(s.combo.timer, 3.5);
+    assert.equal(s.fx.shake, how === 'dash' ? 5 : 3, 'Dash wackelt stärker, Stampfen und Wurf wie ein Stomp');
+    assert.ok(s.fx.hitstop > 0);
+    assert.equal(sfxOf(s, 'stomp'), 1);
+    assert.equal(p.vy, vy, 'kein Absprung des Spielers');
+    assert.equal(s.lives, 3);
+  }
+});
+
+test('damageEnemy erzeugt Partikel (poof) und ein Popup mit den Punkten', { skip: needsParticles }, () => {
+  const { s, e } = walkerScene();
+  s.particles.length = 0;
+  damageEnemy(s, e, 'shot');
+  assert.ok(s.particles.length > 0);
+  assert.equal(poofClouds(s), 8, 'poof an der Stelle des Gegners');
+  assert.ok(s.popups.some((p) => p.text === '+25'));
+  const again = poofClouds(s);
+  damageEnemy(s, e, 'shot');
+  assert.equal(poofClouds(s), again, 'ein toter Gegner erzeugt keine neuen Partikel');
+});
+
+test('damageEnemy ignoriert Gegner, die schon tot sind, und kaputte Eingaben', () => {
+  const { s, e } = walkerScene();
+  assert.equal(damageEnemy(s, e, 'shot'), true);
+  const bonus = s.run.bonus;
+  const popups = s.popups.length;
+  assert.equal(damageEnemy(s, e, 'shot'), false, 'zweiter Treffer');
+  assert.equal(damageEnemy(s, e, 'dash'), false);
+  assert.equal(s.run.bonus, bonus);
+  assert.equal(s.run.kills, 1);
+  assert.equal(s.popups.length, popups);
+  assert.equal(e.dead, 0.001, 'dead läuft nicht neu an');
+
+  // schon schrumpfend
+  const b = walkerScene();
+  b.e.dead = 0.3;
+  assert.equal(damageEnemy(b.s, b.e, 'slam'), false);
+  assert.equal(b.s.run.kills, 0);
+
+  assert.equal(damageEnemy(s, null, 'shot'), false);
+  assert.equal(damageEnemy(s, undefined, 'shot'), false);
+});
+
+test('damageEnemy kennt alle Gegnertypen, auch mitten in der Vorwarnung', () => {
+  const { s, plat } = world({ w: 600 });
+  const list = [
+    add(s, createWalker(s, plat, 0.1)),
+    add(s, createJumper(s, plat, 0.3)),
+    add(s, createCharger(s, plat, 0.5)),
+    add(s, createFlyer(s, 300, 200)),
+    add(s, createHailcloud(s, 500, 180)),
+  ];
+  list[0].state = 'turn';
+  list[1].state = 'crouch';
+  list[2].state = 'windup';
+  list[2].shakeX = 2;
+  list[4].state = 'windup';
+  list[4].shakeX = 2;
+  for (const e of list) {
+    e.telegraph = 0.7;
+    assert.equal(damageEnemy(s, e, 'shot'), true, e.kind);
+    assert.equal(e.state, 'dead');
+    assert.equal(e.telegraph, 0);
+    assert.ok(!e.shakeX, 'kein Zittern mehr');
+  }
+  assert.equal(s.run.kills, 5);
+  assert.deepEqual(s.enemies.map((e) => e.dead > 0), [true, true, true, true, true]);
+  tick(s, 30);
+  assert.equal(s.enemies.length, 0, 'sie schrumpfen und verschwinden');
+});
+
+test('Combo Punkte gelten für Stomp, Dash, Stampfen und Wurf gemeinsam: 25, 50, 75, 100, 100', () => {
+  const { s, plat } = world({ w: 800 });
+  const walkers = [];
+  for (let i = 0; i < 5; i++) walkers.push(pin(add(s, createWalker(s, plat, i / 4))));
+  const gained = [];
+  const take = (fn) => {
+    const before = s.run.bonus;
+    fn();
+    gained.push(s.run.bonus - before);
+  };
+  take(() => {
+    place(s, { cx: centerX(walkers[0]), foot: walkers[0].y + 10, vy: 400 });
+    playerVsEnemies(s);
+  });
+  take(() => {
+    place(s, { cx: walkers[1].x - 10, foot: walkers[1].y + walkers[1].h, dashT: 0.1 });
+    playerVsEnemies(s);
+  });
+  take(() => damageEnemy(s, walkers[2], 'slam'));
+  take(() => damageEnemy(s, walkers[3], 'shot'));
+  take(() => damageEnemy(s, walkers[4], 'shot'));
+  assert.deepEqual(gained, [25, 50, 75, 100, 100]);
+  assert.equal(s.run.kills, 5);
+  assert.equal(s.run.bestCombo, 5);
+  assert.equal(s.combo.count, 5);
+});
+
+test('Combo Punkte: ein Dash durch drei Gegner im selben Schritt zählt hoch', () => {
+  const { s, plat } = world({ w: 600 });
+  const a = pin(add(s, createWalker(s, plat, 0.4)));
+  const b = add(s, createWalker(s, plat, 0.4));
+  b.x = a.x + 20;
+  pin(b);
+  const c = add(s, createWalker(s, plat, 0.4));
+  c.x = a.x + 40;
+  pin(c);
+  place(s, { cx: a.x + 40, foot: a.y + a.h, dashT: 0.1 });
+  playerVsEnemies(s);
+  assert.ok(a.dead > 0 && b.dead > 0 && c.dead > 0);
+  assert.equal(s.run.bonus, 25 + 50 + 75);
+  assert.equal(s.run.kills, 3);
+  assert.equal(s.player.vy, 0, 'Dash prallt nicht ab');
+  assert.equal(s.lives, 3);
+});
+
+test('Doppelpunkte verdoppeln die Punkte jedes Kills', () => {
+  const { s, e } = walkerScene();
+  s.player.power.double = 5;
+  damageEnemy(s, e, 'shot');
+  assert.equal(s.run.bonus, 50);
+});
+
+test('Der Dash nutzt damageEnemy: Partikel poof und Ton, aber kein Schaden', { skip: needsParticles }, () => {
+  const { s, e } = walkerScene();
+  place(s, { cx: e.x - 10, foot: e.y + e.h, dashT: 0.1 });
+  s.particles.length = 0;
+  playerVsEnemies(s);
+  assert.equal(e.state, 'dead');
+  assert.equal(poofClouds(s), 8);
+  assert.equal(sfxOf(s, 'stomp'), 1);
+  assert.equal(s.lives, 3);
+
+  // ein Stomp erzeugt keinen poof
+  const b = walkerScene();
+  place(b.s, { cx: centerX(b.e), foot: b.e.y + 10, vy: 400 });
+  b.s.particles.length = 0;
+  playerVsEnemies(b.s);
+  assert.equal(b.e.state, 'dead');
+  assert.equal(poofClouds(b.s), 0);
+});
+
+// ---------- Sturzflug (Stampfen) ----------
+
+function slamScene() {
+  const { s, e, plat } = walkerScene();
+  const p = s.player;
+  p.slam.active = true;
+  p.slam.t = 0.05;
+  return { s, e, plat, p };
+}
+
+test('Sturzflug von oben ist ein normaler Stomp: Kill, Absprung, Sturzflug endet', () => {
+  // Fußhöhe relativ zur Oberkante des Gegners: erst kein Kontakt, dann flach und tief
+  for (const [foot, contact] of [[-6, false], [12, true], [20, true], [30, true]]) {
+    const { s, e, p } = slamScene();
+    place(s, { cx: centerX(e), foot: e.y + foot, vy: ABILITY.SLAM.SPEED });
+    p.slam.active = true;
+    playerVsEnemies(s);
+    assert.equal(e.dead > 0, contact, `Fußhöhe ${foot}`);
+    assert.equal(s.lives, 3, `Fußhöhe ${foot}`);
+    if (contact) {
+      assert.equal(e.state, 'dead');
+      assert.equal(s.run.bonus, 25);
+      assert.equal(p.slam.active, false, 'Prall beendet den Sturzflug');
+      assert.equal(p.vy, -PHYS.STOMP_BOUNCE);
+    } else {
+      assert.equal(p.slam.active, true);
+    }
+  }
+});
+
+test('Ein Gegner trifft den Spieler nie im Sturzflug, auch nicht bei tiefer oder seitlicher Berührung', () => {
+  for (const foot of [14, 22, 30, 36]) {
+    for (const off of [-40, -30, 0, 30, 40]) {
+      const { s, e, p } = slamScene();
+      place(s, { cx: centerX(e) + off, foot: e.y + foot, vy: ABILITY.SLAM.SPEED });
+      p.slam.active = true;
+      const px = p.x;
+      playerVsEnemies(s);
+      assert.equal(s.lives, 3, `Fuß ${foot} Versatz ${off}`);
+      assert.equal(p.invuln, 0, 'kein Treffer');
+      assert.equal(p.x, px);
+      const overlap = Math.abs(off) < 35;
+      assert.equal(e.dead > 0, overlap, `Fuß ${foot} Versatz ${off}`);
+    }
+  }
+});
+
+test('Im Sturzflug werden alle berührten Gegner besiegt, der Spieler springt nur einmal ab', () => {
+  const { s, plat } = world({ w: 400 });
+  const a = pin(add(s, createWalker(s, plat, 0.5)));
+  const b = add(s, createJumper(s, plat, 0.5));
+  b.x = a.x + 25;
+  pin(b);
+  const p = place(s, { cx: a.x + 30, foot: a.y + 20, vy: ABILITY.SLAM.SPEED });
+  p.slam.active = true;
+  playerVsEnemies(s);
+  assert.ok(a.dead > 0 && b.dead > 0);
+  assert.equal(s.lives, 3);
+  assert.equal(s.run.kills, 2);
+  assert.equal(p.vy, -PHYS.STOMP_BOUNCE);
+});
+
+test('Ohne Abwärtsbewegung gilt der Sturzflug Schutz nicht: seitlicher Treffer schadet', { skip: needsHurt }, () => {
+  const { s, e, p } = slamScene();
+  place(s, { cx: e.x - 5, foot: e.y + e.h, vy: 0 });
+  p.slam.active = true;
+  playerVsEnemies(s);
+  assert.equal(e.dead, 0);
+  assert.equal(s.lives, 2);
+});
+
+test('Echter Sturzflug aus der Höhe: Stomp auf den Gegner, Schockwelle besiegt den Nachbarn, kein Schaden', () => {
+  for (const drop of [60, 140, 260]) {
+    const { s, plat } = world({ w: 700 });
+    const e = pin(add(s, createWalker(s, plat, 0.5)));
+    const near = add(s, createJumper(s, plat, 0.5));
+    near.x = e.x + 70;
+    pin(near);
+    const far = add(s, createWalker(s, plat, 0.5));
+    far.x = e.x + 260;
+    pin(far);
+    place(s, { cx: centerX(e), foot: e.y - drop });
+    simStep(s, input({ slamPressed: true }));
+    assert.equal(s.player.slam.active, true, `Höhe ${drop}`);
+    for (let i = 0; i < 40 && e.dead === 0; i++) simStep(s);
+    assert.ok(e.dead > 0, `Höhe ${drop}: gestompt`);
+    assert.equal(s.player.slam.active, false);
+    assert.equal(s.lives, 3);
+    assert.ok(near.dead > 0, 'Schockwelle erreicht den Nachbarn');
+    assert.equal(far.dead, 0, 'zu weit weg');
+    assert.equal(s.run.kills, 2);
+    assert.equal(s.run.bonus, 25 + 50);
+  }
+});
+
+// ---------- Tempo (pace) ----------
+
+test('pace: Walker läuft schneller, die Standzeit am Rand bleibt fest', () => {
+  for (const pace of [1, 1.3, 1.6]) {
+    const { s, plat } = world({ w: 400 });
+    const e = add(s, createWalker(s, plat, 0.5, { dir: 1, pace }));
+    const x0 = e.x;
+    tick(s, 30);
+    assert.ok(Math.abs(e.x - (x0 + ENEMY.WALKER.speed * pace * 0.5)) < 0.6, `pace ${pace}`);
+    assert.ok(Math.abs(e.vx - ENEMY.WALKER.speed * pace) < 1e-9);
+    tickUntil(s, () => e.state === 'turn');
+    let steps = 0;
+    const tele = [];
+    while (e.state === 'turn') {
+      tick(s);
+      steps++;
+      if (e.state === 'turn') tele.push(e.telegraph);
+    }
+    assert.ok(Math.abs(steps * STEP - ENEMY.WALKER.turnTime) <= STEP * 1.5, `Standzeit ${steps * STEP} bei pace ${pace}`);
+    for (let i = 1; i < tele.length; i++) assert.ok(Math.abs(tele[i] - tele[i - 1] - STEP / ENEMY.WALKER.turnTime) < 1e-9);
+  }
+});
+
+test('pace: Jumper wartet kürzer, zieht sich aber immer gleich lange zusammen und springt gleich', () => {
+  const waits = {};
+  const rngAfter = {};
+  for (const pace of [1, 1.6]) {
+    const { s, plat } = world({ w: 400 });
+    const e = add(s, createJumper(s, plat, 0.5, { dir: 1, pace }));
+    e.cooldown = 0.2;
+    const t0 = s.t;
+    tickUntil(s, () => e.state === 'crouch');
+    const crouch0 = s.t;
+    tickUntil(s, () => e.state === 'air');
+    const crouchTime = s.t - crouch0;
+    assert.ok(crouchTime >= 0.45, `Vorwarnung ${crouchTime}`);
+    assert.ok(Math.abs(crouchTime - ENEMY.JUMPER.crouchTime) <= 2 * STEP, `pace ${pace}`);
+    assert.equal(e.vy, -ENEMY.JUMPER.hopVy);
+    assert.equal(e.vx, ENEMY.JUMPER.hopVx);
+    tickUntil(s, () => e.state === 'patrol');
+    waits[pace] = e.cooldown;
+    rngAfter[pace] = s.rng;
+    const w0 = s.t;
+    tickUntil(s, () => e.state === 'crouch');
+    assert.ok(Math.abs(s.t - w0 - e.cooldown) <= 2 * STEP + 1e-9 || e.cooldown === 0, 'Wartezeit wird eingehalten');
+    assert.ok(t0 >= 0);
+  }
+  assert.ok(waits[1] >= ENEMY.JUMPER.minWait && waits[1] <= ENEMY.JUMPER.maxWait);
+  assert.ok(Math.abs(waits[1.6] - waits[1] / 1.6) < 1e-9, 'gleicher Zufallswert, durch pace geteilt');
+  assert.equal(rngAfter[1], rngAfter[1.6], 'pace ändert nicht, wie viel Zufall verbraucht wird');
+});
+
+test('pace: Charger patrouilliert und pausiert schneller, das Aufladen bleibt mindestens 0,7 s', () => {
+  const pace = 1.6;
+  const { s, plat } = world({ w: 600 });
+  const e = add(s, createCharger(s, plat, 0.3, { dir: 1, pace }));
+  e.cooldown = 99;
+  const x0 = e.x;
+  tick(s, 30);
+  assert.ok(Math.abs(e.x - (x0 + ENEMY.CHARGER.speed * pace * 0.5)) < 0.6, 'Patrouille schneller');
+  e.cooldown = 0;
+  place(s, { cx: centerX(e) + 100, foot: e.y + e.h });
+  tickUntil(s, () => e.state === 'windup');
+  const w0 = s.t;
+  tickUntil(s, () => e.state === 'dash');
+  const windupTime = s.t - w0;
+  assert.ok(windupTime >= 0.7, `Windup ${windupTime}`);
+  assert.ok(Math.abs(windupTime - ENEMY.CHARGER.windup) <= 2 * STEP, 'Windup unabhängig vom Tempo');
+  tick(s);
+  assert.equal(e.vx, ENEMY.CHARGER.dashSpeed, 'Dash Tempo bleibt');
+  tickUntil(s, () => e.state === 'cooldown');
+  const c0 = s.t;
+  tickUntil(s, () => e.state === 'patrol');
+  assert.ok(Math.abs(s.t - c0 - ENEMY.CHARGER.cooldown / pace) <= 2 * STEP, `Pause ${s.t - c0}`);
+});
+
+test('pace: Flyer fliegt schneller, die Sinus Bahn bleibt wie im Vertrag', () => {
+  const { s } = world();
+  const e = add(s, createFlyer(s, 400, 160, { range: 400, dir: 1, phase: 0.4, pace: 1.5 }));
+  const x0 = e.x;
+  tick(s, 60);
+  assert.ok(Math.abs(e.x - (x0 + ENEMY.FLYER.speed * 1.5)) < 1);
+  assert.ok(Math.abs(e.vx - ENEMY.FLYER.speed * 1.5) < 1e-9);
+  const y = e.baseY + e.amp * Math.sin(ENEMY.FLYER.omega * s.t + e.phase);
+  assert.ok(Math.abs(e.y - y) < 1e-9);
+});
+
+test('pace: kaputte Werte zählen als 1, extreme Werte werden begrenzt', () => {
+  for (const pace of [0, -2, NaN, undefined, null, 'schnell']) {
+    const { s, plat } = world({ w: 500 });
+    const e = add(s, createWalker(s, plat, 0.5, { dir: 1 }));
+    const f = add(s, createFlyer(s, 400, 160, { range: 400, dir: 1 }));
+    e.pace = pace;
+    f.pace = pace;
+    const ex = e.x;
+    const fx = f.x;
+    tick(s, 30);
+    assert.ok(Math.abs(e.x - ex - ENEMY.WALKER.speed * 0.5) < 0.6, `pace ${String(pace)}`);
+    assert.ok(Math.abs(f.x - fx - ENEMY.FLYER.speed * 0.5) < 0.6, `pace ${String(pace)}`);
+  }
+  const { s, plat } = world({ w: 2000 });
+  const e = add(s, createWalker(s, plat, 0.1, { dir: 1, pace: 1000 }));
+  const x0 = e.x;
+  tick(s, 60);
+  assert.ok(e.x - x0 <= ENEMY.WALKER.speed * 3 + 1, 'höchstens dreifaches Tempo');
+});
+
 // ---------- Bereich, Host, Aufräumen ----------
 
 test('Nur Gegner im aktiven Bereich werden aktualisiert', () => {
@@ -870,6 +1235,7 @@ const STATES = {
   jumper: ['patrol', 'crouch', 'air', 'dead'],
   charger: ['patrol', 'windup', 'dash', 'cooldown', 'dead'],
   flyer: ['fly', 'dead'],
+  hailcloud: ['fly', 'windup', 'dead'],
 };
 
 function checkEnemy(e, label) {
@@ -880,6 +1246,10 @@ function checkEnemy(e, label) {
   assert.ok(e.telegraph >= 0 && e.telegraph <= 1, `${label}: telegraph ${e.telegraph}`);
   assert.ok(e.dir === 1 || e.dir === -1, `${label}: dir`);
   assert.ok(STATES[e.kind].includes(e.state), `${label}: Zustand ${e.state}`);
+  if (e.kind === 'hailcloud') {
+    assert.equal(e.telegraph > 0, e.state === 'windup', `${label}: Telegraph nur im Windup`);
+    if (e.state !== 'windup') assert.ok(!e.shakeX, `${label}: Zittern nur im Windup`);
+  }
   if (GROUND.has(e.kind)) {
     assert.ok(e.x >= e.minX - 1e-9 && e.x <= e.maxX + 1e-9, `${label}: x ${e.x} außerhalb ${e.minX}..${e.maxX}`);
     if (e.kind === 'jumper') assert.ok(e.y <= e.baseY + 1e-9 && e.y >= e.baseY - 60, `${label}: y ${e.y}`);
@@ -897,12 +1267,14 @@ function fuzzScene(seed) {
   const { s, plat } = world({ w, seed });
   const n = int(r, 1, 5);
   for (let i = 0; i < n; i++) {
-    const kind = int(r, 0, 3);
+    const kind = int(r, 0, 4);
     const dir = int(r, 0, 1) ? 1 : -1;
-    if (kind === 0) add(s, createWalker(s, plat, range(r, 0, 1), { dir }));
-    else if (kind === 1) add(s, createJumper(s, plat, range(r, 0, 1), { dir }));
-    else if (kind === 2) add(s, createCharger(s, plat, range(r, 0, 1), { dir }));
-    else add(s, createFlyer(s, plat.x + range(r, 0, w), 180, { range: range(r, 40, 300), dir, phase: range(r, 0, 6) }));
+    const pace = range(r, 0.8, 1.6);
+    if (kind === 0) add(s, createWalker(s, plat, range(r, 0, 1), { dir, pace }));
+    else if (kind === 1) add(s, createJumper(s, plat, range(r, 0, 1), { dir, pace }));
+    else if (kind === 2) add(s, createCharger(s, plat, range(r, 0, 1), { dir, pace }));
+    else if (kind === 3) add(s, createFlyer(s, plat.x + range(r, 0, w), 180, { range: range(r, 40, 300), dir, phase: range(r, 0, 6), pace }));
+    else add(s, createHailcloud(s, plat.x + range(r, 0, w), range(r, 120, 200), { range: range(r, 40, 300), dir, phase: range(r, 0, 6), pace }));
   }
   return { r, s, plat };
 }
@@ -926,6 +1298,8 @@ test('Fuzz: zufällige Gegner auf zufälligen Plattformen bleiben endlich und fa
           } else dashDir.delete(e.id);
         }
       }
+      assert.ok(s.hazards.length <= LIMITS.MAX_HAZARDS, 'Hagel hält das Limit ein');
+      for (const h of s.hazards) assert.equal(h.kind, 'hail');
     }
     assert.ok(structuredClone(s));
   }
@@ -939,9 +1313,13 @@ test('Fuzz: mit Kollisionen, Stomps und Dash bleibt alles endlich und tote Gegne
       if (i % 11 === 0) {
         const p = place(s, { cx: plat.x + range(r, 0, plat.w), foot: plat.y + range(r, -90, 10), vy: [0, 300, 900, -300][int(r, 0, 3)], invuln: 99, dashT: int(r, 0, 9) === 0 ? 0.1 : 0 });
         p.x += range(r, -20, 20);
+        p.slam.active = int(r, 0, 5) === 0;
+        if (p.slam.active) p.vy = ABILITY.SLAM.SPEED;
       }
       tick(s);
       playerVsEnemies(s);
+      s.player.slam.active = false;
+      assert.ok(s.hazards.length <= LIMITS.MAX_HAZARDS);
       assert.ok(s.enemies.length <= last, 'Gegner kommen nicht von allein dazu');
       last = s.enemies.length;
       for (const e of s.enemies) {

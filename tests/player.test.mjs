@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KILL_Y, MAX_LIVES, PHYS, STEP, W } from '../game/constants.js';
+import { ABILITY, KILL_Y, MAX_LIVES, PHYS, STEP, W } from '../game/constants.js';
 import {
   createBreakablePlatform, createLightning, createMovingPlatform, createRain, createSpike,
   createStaticPlatform, createWalker, createWind,
@@ -73,6 +73,10 @@ function dropOnto(s, plat, x) {
 }
 
 const bottom = (p) => p.y + p.h;
+
+// Sprungtaste nur bis zum höchsten Punkt halten: Gleiten setzt erst beim Fallen ein, so bleibt die Bahn
+// die reine Sprungparabel, mit der reach.js rechnet.
+const noGlide = (p, pressed = false) => pressed || p.vy <= ABILITY.GLIDE.MIN_VY;
 
 // Eine Sprungbahn mit gehaltener Taste, gibt den höchsten Punkt (Anstieg in px) zurück
 function peakRise(s, firstHeld = true) {
@@ -179,12 +183,14 @@ function crossing(gap, dy, { phase = 0, secondAt = -1 } = {}) {
   tick(s, input({ move: 1, jumpHeld: true }));
   let jumpedAt = -1;
   for (let i = 0; i < 400; i++) {
-    const inp = input({ move: 1, jumpHeld: true });
+    const inp = input({ move: 1, jumpHeld: noGlide(p) });
     if (jumpedAt < 0 && p.onGround && p.x + p.vx * STEP >= 0) {
       inp.jumpPressed = true; // letzter Schritt mit Boden unter den Füßen
+      inp.jumpHeld = true;
       jumpedAt = i;
     } else if (jumpedAt >= 0 && secondAt >= 0 && i - jumpedAt === secondAt && p.jumps === 1) {
       inp.jumpPressed = true;
+      inp.jumpHeld = true;
     }
     tick(s, inp);
     if (jumpedAt >= 0 && p.onGround) return p.groundId === B.id;
@@ -347,7 +353,7 @@ test('Sprungpuffer: Drücken kurz vor der Landung löst den Sprung bei der Landu
     let landed = false;
     let jumped = false;
     for (let i = 0; i < 60; i++) {
-      tick(s, input({ jumpPressed: i === pressAt, jumpHeld: true }));
+      tick(s, input({ jumpPressed: i === pressAt })); // Taste nicht halten, sonst würde er gleiten und später landen
       if (p.onGround) landed = true;
       if (landed && p.vy < 0) jumped = true;
     }
@@ -366,7 +372,7 @@ test('Squash und Stretch: Sprung streckt, Landung staucht nach Aufprall, Rückke
   // Landung
   let landSquash = null;
   for (let i = 0; i < 90 && !landSquash; i++) {
-    tick(s, input({ jumpHeld: true }));
+    tick(s, input({ jumpHeld: noGlide(p) }));
     if (p.onGround) landSquash = { x: p.squashX, y: p.squashY };
   }
   assert.ok(landSquash.x > 1.1 && landSquash.x <= 1.25, `Landung x ${landSquash.x}`);
@@ -921,51 +927,66 @@ function platformUnder(s) {
 
 // ---------- Dash ----------
 
-test('Dash braucht das Powerup und wirkt nur bei abgelaufener Abklingzeit', () => {
+// Anzahl der Schritte, in denen ein Dash der Dauer sec aktiv ist (der Tastendruck ist der erste, der letzte ist ein Teilschritt)
+const dashFrames = (sec) => Math.ceil(sec / STEP - 1e-6);
+
+test('Der Wolkenstoß ist immer da, das Regenbogen Powerup macht ihn stärker', () => {
   const s = world();
   const g = addGround(s);
   const p = standOn(s, g, 0);
   tick(s, input({ dashPressed: true, move: 1 }));
-  assert.equal(p.dash.t, 0, 'ohne Powerup kein Dash');
-  p.power.dashT = 5;
-  tick(s, input({ dashPressed: true, move: 1 }));
-  assert.ok(p.dash.t > 0);
+  assert.ok(p.dash.t > 0, 'ohne Powerup möglich');
+  assert.equal(p.dash.rainbow, false);
+  assert.ok(Math.abs(p.dash.t - ABILITY.DASH_BASIC.TIME) < 1e-9);
+
+  const s2 = world();
+  const g2 = addGround(s2);
+  const p2 = standOn(s2, g2, 0);
+  p2.power.dashT = 5;
+  tick(s2, input({ dashPressed: true, move: 1 }));
+  assert.ok(p2.dash.t > 0);
+  assert.equal(p2.dash.rainbow, true);
+  assert.ok(Math.abs(p2.dash.t - ABILITY.DASH_RAINBOW.TIME) < 1e-9);
 });
 
-test('Dash: Dauer, Strecke, Unverwundbarkeit und Abklingzeit', () => {
-  const s = world();
-  const g = addGround(s);
-  const p = standOn(s, g, 0);
-  p.power.dashT = 5;
-  p.face = 1;
-  const x0 = p.x;
-  const y0 = p.y;
-  tick(s, input({ dashPressed: true }));
-  let frames = 1; // der Schritt mit dem Tastendruck ist der erste Dashschritt
-  let endX = p.x;
-  while (p.dash.t > 0 && frames < 60) {
-    assert.equal(hurtPlayer(s, { kind: 'enemy', label: 'Hüpfer', x: p.x, y: p.y }), 'ignored', 'unverwundbar im Dash');
-    assert.equal(p.trail, 1);
-    assert.equal(p.y, y0, 'Schwerkraft aus');
-    endX = p.x;
-    tick(s);
-    if (p.dash.t > 0) frames++;
-  }
-  assert.equal(frames, Math.round(PHYS.DASH_TIME / STEP), `Dauer ${frames} Schritte`);
-  const dist = endX - x0;
-  assert.ok(Math.abs(dist - PHYS.DASH_SPEED * PHYS.DASH_TIME) < PHYS.DASH_SPEED * STEP * 1.01, `Strecke ${dist}`);
-  assert.ok(p.dash.cd > 0 && p.dash.cd <= PHYS.DASH_COOLDOWN);
-  // nach dem Dash wieder verwundbar
-  assert.equal(hurtPlayer(s, { kind: 'enemy', label: 'Hüpfer', x: p.x, y: p.y }), 'hurt');
-  s.player.invuln = 0;
+test('Dash: Dauer, Strecke, Unverwundbarkeit und Abklingzeit (Basis und Regenbogen)', () => {
+  for (const rainbow of [false, true]) {
+    const def = rainbow ? ABILITY.DASH_RAINBOW : ABILITY.DASH_BASIC;
+    const s = world();
+    const g = addGround(s);
+    const p = standOn(s, g, 0);
+    if (rainbow) p.power.dashT = 50;
+    p.face = 1;
+    const x0 = p.x;
+    const y0 = p.y;
+    tick(s, input({ dashPressed: true }));
+    let frames = 1; // der Schritt mit dem Tastendruck ist der erste Dashschritt
+    let endX = p.x;
+    while (p.dash.t > 0 && frames < 60) {
+      assert.equal(hurtPlayer(s, { kind: 'enemy', label: 'Hüpfer', x: p.x, y: p.y }), 'ignored', 'unverwundbar im Dash');
+      assert.equal(p.trail, 1);
+      assert.equal(p.y, y0, 'Schwerkraft aus');
+      endX = p.x;
+      tick(s);
+      if (p.dash.t > 0) frames++;
+    }
+    assert.equal(frames, dashFrames(def.TIME), `Dauer ${frames} Schritte (rainbow ${rainbow})`);
+    const dist = endX - x0;
+    assert.ok(Math.abs(dist - PHYS.DASH_SPEED * def.TIME) < PHYS.DASH_SPEED * STEP * 1.01, `Strecke ${dist}`);
+    assert.ok(p.dash.cd > def.COOLDOWN - 2 * STEP && p.dash.cd <= def.COOLDOWN, `Abklingzeit ${p.dash.cd}`);
+    // nach dem Dash wieder verwundbar
+    assert.equal(hurtPlayer(s, { kind: 'enemy', label: 'Hüpfer', x: p.x, y: p.y }), 'hurt');
+    s.player.invuln = 0;
 
-  // Abklingzeit: zu früh gedrückt wirkt nicht, später schon
-  ticks(s, 15);
-  tick(s, input({ dashPressed: true }));
-  assert.equal(p.dash.t, 0, 'noch in der Abklingzeit');
-  ticks(s, 36); // zusammen mehr als 0,55 s seit Ende des Dashs
-  tick(s, input({ dashPressed: true }));
-  assert.ok(p.dash.t > 0, 'wieder bereit');
+    // Abklingzeit: kurz vor Ablauf wirkt der Druck nicht, kurz danach schon
+    const wait = Math.round(def.COOLDOWN / STEP);
+    ticks(s, wait - 6);
+    tick(s, input({ dashPressed: true }));
+    assert.equal(p.dash.t, 0, `noch in der Abklingzeit (rainbow ${rainbow})`);
+    ticks(s, 10);
+    tick(s, input({ dashPressed: true }));
+    assert.ok(p.dash.t > 0, `wieder bereit (rainbow ${rainbow})`);
+  }
 });
 
 test('Dash in der Luft geht geradeaus, folgt der Eingaberichtung und endet mit normalem Tempo', () => {
@@ -991,19 +1012,21 @@ test('Dash in der Luft geht geradeaus, folgt der Eingaberichtung und endet mit n
   assert.ok(p.vy > 0, 'danach wirkt die Schwerkraft wieder');
 });
 
-test('Dash über eine Lücke', () => {
-  const s = world();
-  const A = createStaticPlatform(s, -4000, GROUND_Y, 4000, { ground: true });
-  const B = createStaticPlatform(s, 140, GROUND_Y, 2000, { ground: true });
-  s.platforms.push(A, B);
-  const p = s.player;
-  p.x = -40;
-  p.y = GROUND_Y - p.h;
-  p.power.dashT = 5;
-  tick(s);
-  tick(s, input({ dashPressed: true, move: 1 }));
-  ticks(s, 30, input({ move: 1 }));
-  assert.equal(p.groundId, B.id, 'am Rand gestartet, die Lücke ist mit dem Dash überwunden');
+test('Dash über eine Lücke: Basis und Regenbogen', () => {
+  for (const [rainbow, gapEnd] of [[false, 90], [true, 140]]) {
+    const s = world();
+    const A = createStaticPlatform(s, -4000, GROUND_Y, 4000, { ground: true });
+    const B = createStaticPlatform(s, gapEnd, GROUND_Y, 2000, { ground: true });
+    s.platforms.push(A, B);
+    const p = s.player;
+    p.x = -40;
+    p.y = GROUND_Y - p.h;
+    if (rainbow) p.power.dashT = 5;
+    tick(s);
+    tick(s, input({ dashPressed: true, move: 1 }));
+    ticks(s, 30, input({ move: 1 }));
+    assert.equal(p.groundId, B.id, `am Rand gestartet, die Lücke ist mit dem Dash überwunden (rainbow ${rainbow})`);
+  }
 });
 
 // ---------- Wind und Regen ----------

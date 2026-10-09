@@ -4,263 +4,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  H, HINTS, LIMITS, METER, REST, SECTIONS, START_X, W, difficultyAt, gateMeter,
+  H, HINTS, LIMITS, METER, REST, SECTIONS, START_X, TIPS, W, difficultyAt, gateMeter,
 } from '../game/constants.js';
 import {
   createStaticPlatform, createMovingPlatform, createBreakablePlatform, createWalker, createSpike, createLightning, createStar,
-  createPowerup, createGate, createRain,
+  createPowerup, createGate, createRain, createSpringPlatform, createBlinkPlatform, createHailcloud, createHail, createComet,
 } from '../game/entities.js';
-import { cleanup, chunkAt, ensureAhead, initGenerator, updateHints } from '../game/generator.js';
-import { hopOk, maxGap } from '../game/reach.js';
+import { cleanup, chunkAt, diffFit, ensureAhead, initGenerator, updateHints } from '../game/generator.js';
+import { hopOk, hopOkMoving } from '../game/reach.js';
 import { createState } from '../game/state.js';
-import { activeEnemies } from '../game/sim.js';
+import { activeEnemies, stepSim } from '../game/sim.js';
 import { safeFor } from '../game/validate.js';
 import { CHUNKS, FLAT, GATE } from '../game/chunks/index.js';
 import { checkChunk } from './chunk-harness.mjs';
+import { TEST_LIB, hop, unlockMeter } from './gen-lib.mjs';
 import { input, invariants, newGame, run } from './helpers.mjs';
 
-// ---------- Test Chunks ----------
-
-// Abstand, den ein Sprung von Höhe y1 nach y2 mit dem Anteil k der Spielsicherheit überbrückt
-const hop = (b, y1, y2, k = 0.8, o = {}) => Math.max(60, Math.floor(maxGap(y1, y2, { safe: safeFor(b.diff) * k, ...o })));
-
-const TEST_LIB = [
-  {
-    id: 't-meadow', name: 'Testwiese', diff: 1, weight: 3, min: 0, max: Infinity, mech: [], rest: true,
-    build(b) {
-      const g = b.ground(0, 0, b.int(520, 680));
-      b.starsOver(g, b.int(5, 8), 55);
-      b.route(g);
-    },
-  },
-  {
-    id: 't-gift', name: 'Testgeschenk', diff: 1, weight: 2, min: 250, max: Infinity, mech: ['powerup'], rest: true,
-    build(b) {
-      const g = b.ground(0, 0, 600);
-      b.powerup(b.pick(['shield', 'magnet', 'feather']), 300, -60);
-      b.starsOver(g, 6, 55);
-      b.route(g);
-    },
-  },
-  {
-    id: 't-pause', name: 'Testpause', diff: 2, weight: 2, min: 800, max: Infinity, mech: [], rest: true,
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const x = 300 + hop(b, 0, -20, 0.6);
-      const c = b.cloud(x, -20, 200);
-      const e = b.ground(x + 200 + hop(b, -20, 0, 0.6), 0, 340);
-      b.starArc(300, x, -20, 55, 5);
-      b.starsOver(e, 5, 55);
-      b.route(a, c, e);
-    },
-  },
-  {
-    id: 't-hops', name: 'Testhüpfer', diff: 1, weight: 2, min: 0, max: Infinity, mech: [],
-    build(b) {
-      const a = b.ground(0, 0, 260);
-      const x1 = 260 + hop(b, 0, -20);
-      const c = b.cloud(x1, -20, 170);
-      const x2 = x1 + 170 + hop(b, -20, 0);
-      const e = b.ground(x2, 0, 320);
-      b.starArc(260, x1, -20, 60, 5);
-      b.starsOver(e, 4, 55);
-      b.route(a, c, e);
-    },
-  },
-  {
-    id: 't-wave', name: 'Testwelle', diff: 1, weight: 2, min: 0, max: Infinity, mech: [],
-    build(b) {
-      const a = b.ground(0, 0, 240);
-      const x1 = 240 + hop(b, 0, 25);
-      const c1 = b.cloud(x1, 25, 150);
-      const x2 = x1 + 150 + hop(b, 25, -10);
-      const c2 = b.cloud(x2, -10, 150);
-      const x3 = x2 + 150 + hop(b, -10, 20);
-      const e = b.ground(x3, 20, 300);
-      b.starsOver(c1, 3, 50);
-      b.starsOver(c2, 3, 50);
-      b.starsOver(e, 4, 50);
-      b.route(a, c1, c2, e);
-    },
-  },
-  {
-    id: 't-bumps', name: 'Testhügel', diff: 1, weight: 2, min: 0, max: Infinity, mech: [],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const x1 = 300 + hop(b, 0, -15);
-      const c = b.cloud(x1, -15, 200);
-      const e = b.ground(x1 + 200 + hop(b, -15, -15), -15, 280);
-      b.starArc(300, x1 + 200, -15, 50, 5);
-      b.starsOver(e, 3, 50);
-      b.route(a, c, e);
-    },
-  },
-  {
-    id: 't-long', name: 'Testweg', diff: 1, weight: 2, min: 0, max: Infinity, mech: [],
-    build(b) {
-      const a = b.ground(0, 0, 400);
-      const x1 = 400 + hop(b, 0, 0, 0.6);
-      const e = b.ground(x1, 0, 480);
-      b.starsOver(a, 4, 55);
-      b.starsOver(e, 5, 55);
-      b.route(a, e);
-    },
-  },
-  {
-    id: 't-steps', name: 'Teststufen', diff: 1.5, weight: 2, min: 0, max: Infinity, mech: [],
-    build(b) {
-      const a = b.ground(0, 0, 260);
-      const x1 = 260 + hop(b, 0, -30);
-      const c1 = b.cloud(x1, -30, 150);
-      const x2 = x1 + 150 + hop(b, -30, -60);
-      const c2 = b.cloud(x2, -60, 150);
-      const x3 = x2 + 150 + hop(b, -60, -60);
-      const e = b.cloud(x3, -60, 240);
-      b.starLine(x1 + 20, -80, x2 + 130, -110, 5);
-      b.starsOver(e, 4, 55);
-      b.route(a, c1, c2, e);
-    },
-  },
-  {
-    id: 't-walker', name: 'Testgewitter', diff: 1.5, weight: 2, min: 250, max: Infinity, mech: ['walker'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const h = b.ground(300 + hop(b, 0, 0), 0, 560);
-      b.walker(h, 0.55);
-      b.starsOver(h, 4, 80);
-      b.route(a, h);
-    },
-  },
-  {
-    id: 't-spike', name: 'Teststachel', diff: 2, weight: 2, min: 250, max: Infinity, mech: ['spike'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const h = b.ground(300 + hop(b, 0, 0), 0, 440);
-      const sp = b.spike(h, 0.5);
-      b.starArc(sp.x - b.ox - 50, sp.x - b.ox + sp.w + 50, -30, 70, 5);
-      b.route(a, h);
-    },
-  },
-  {
-    id: 't-moving', name: 'Testwolke', diff: 2.3, weight: 2, min: 500, max: Infinity, mech: ['moving'],
-    build(b) {
-      const a = b.ground(0, 0, 260);
-      const x1 = 260 + hop(b, 0, -20, 0.6);
-      const m = b.moving(x1, -20, 150, { ay: 35, period: 3.6 });
-      const e = b.ground(x1 + 150 + hop(b, -20, 0, 0.6), 0, 320);
-      b.starsOver(e, 4, 55);
-      b.route(a, m, e);
-    },
-  },
-  {
-    id: 't-rain', name: 'Testregen', diff: 2.2, weight: 2, min: 500, max: Infinity, mech: ['rain'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const h = b.ground(300 + hop(b, 0, 0), 0, 620);
-      b.rain(h.x - b.ox - 40, 360);
-      b.starsOver(h, 6, 60);
-      b.route(a, h);
-    },
-  },
-  {
-    id: 't-crumble', name: 'Testbrösel', diff: 3, weight: 2, min: 800, max: Infinity, mech: ['breakable'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const x1 = 300 + hop(b, 0, -15, 0.7);
-      const br1 = b.breakable(x1, -15, 130);
-      const x2 = x1 + 130 + hop(b, -15, -15, 0.7);
-      const br2 = b.breakable(x2, -15, 130);
-      const e = b.ground(x2 + 130 + hop(b, -15, 0, 0.7), 0, 320);
-      b.starsOver(br1, 2, 50);
-      b.starsOver(br2, 2, 50);
-      b.route(a, br1, br2, e);
-    },
-  },
-  {
-    id: 't-jumper', name: 'Testhüpfer Gegner', diff: 3, weight: 2, min: 800, max: Infinity, mech: ['jumper'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const h = b.ground(300 + hop(b, 0, 0), 0, 460);
-      b.jumper(h, 0.5);
-      b.starsOver(h, 4, 80);
-      b.route(a, h);
-    },
-  },
-  {
-    id: 't-bolt', name: 'Testblitz', diff: 3.2, weight: 2, min: 800, max: Infinity, mech: ['lightning'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const h = b.ground(300 + hop(b, 0, 0), 0, 640);
-      b.lightning(h.x - b.ox + 300);
-      b.starsOver(h, 5, 60);
-      b.route(a, h);
-    },
-  },
-  {
-    id: 't-wind', name: 'Testwind', diff: 3.2, weight: 2, min: 1200, max: Infinity, mech: ['wind'],
-    build(b) {
-      const a = b.ground(0, 0, 280);
-      const x1 = 280 + hop(b, 0, 0, 0.6);
-      const e = b.ground(x1, 0, 340);
-      b.wind(200, -220, x1 + 100, 300, { vx: 50 });
-      b.starsOver(e, 4, 55);
-      b.route(a, e);
-    },
-  },
-  {
-    id: 't-flyer', name: 'Testflieger', diff: 3.5, weight: 2, min: 1200, max: Infinity, mech: ['flyer'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const h = b.ground(300 + hop(b, 0, 0), 0, 560);
-      b.flyer(h.x - b.ox + 280, -210);
-      b.starsOver(h, 4, 60);
-      b.route(a, h);
-    },
-  },
-  {
-    id: 't-charger', name: 'Teststurm', diff: 4, weight: 2, min: 1200, max: Infinity, mech: ['charger'],
-    build(b) {
-      const a = b.ground(0, 0, 300);
-      const h = b.ground(300 + hop(b, 0, 0), 0, 560);
-      b.charger(h, 0.7);
-      b.starsOver(h, 3, 70);
-      b.route(a, h);
-    },
-  },
-  {
-    id: 't-double', name: 'Testweitsprung', diff: 5, weight: 2, min: 1700, max: Infinity, mech: [],
-    build(b) {
-      const a = b.ground(0, 0, 260);
-      const x1 = 260 + hop(b, 0, -40, 0.8, { dbl: true });
-      const c = b.cloud(x1, -40, 160);
-      const e = b.ground(x1 + 160 + hop(b, -40, 0, 0.8, { dbl: true }), 0, 300);
-      b.starArc(260, x1, -40, 90, 6);
-      b.starsOver(e, 3, 55);
-      b.route(a, c, e);
-    },
-  },
-  {
-    // Hoher Chunk: zwingt den Generator, Anstieg und Höhenbereich sauber zu verbinden
-    id: 't-tall', name: 'Testturm', diff: 2.5, weight: 2, min: 250, max: Infinity, mech: [],
-    build(b) {
-      const a = b.ground(0, 0, 260);
-      const x1 = 260 + hop(b, 0, -55, 0.55);
-      const c1 = b.cloud(x1, -55, 150);
-      const x2 = x1 + 150 + hop(b, -55, -110, 0.55);
-      const c2 = b.cloud(x2, -110, 150);
-      const e = b.ground(x2 + 150 + 120, 70, 300);
-      b.starsOver(c1, 2, 50);
-      b.starsOver(c2, 2, 50);
-      b.route(a, c1, c2, e);
-    },
-  },
-];
+// Die Test Chunks stehen in tests/gen-lib.mjs: eine Grundliste bis Schwierigkeit 5 (TEST_LIB[0] bis [7] sind einfache
+// Chunks, auf die einzelne Tests mit Index zugreifen) und dazu der obere Teil der Kurve bis 9,4 mit allen neuen Mechaniken.
 
 // ---------- Werkzeug ----------
 
-const MECH_OF_KIND = { walker: 'walker', jumper: 'jumper', flyer: 'flyer', charger: 'charger', spike: 'spike', lightning: 'lightning', wind: 'wind', rain: 'rain' };
-const unlockMeter = (tag) => Math.min(...SECTIONS.filter((sec) => sec.mech.includes(tag)).map((sec) => sec.from));
+const MECH_OF_KIND = {
+  walker: 'walker', jumper: 'jumper', flyer: 'flyer', charger: 'charger', hailcloud: 'hailcloud', spike: 'spike',
+  lightning: 'lightning', comet: 'comet', wind: 'wind', rain: 'rain',
+};
+// x der linken Kante eines Hindernisses (Blitz und Komet haben ihre Mitte in x)
+const hazardLeft = (h) => (h.kind === 'lightning' || h.kind === 'comet' ? h.x - h.w / 2 : h.x);
 const meterOf = (x) => (x - START_X) / METER;
+const atMeter = (m) => START_X + m * METER;
 const LISTS = ['platforms', 'enemies', 'hazards', 'zones', 'stars', 'powerups', 'gates'];
 
 // Erzeugt die Welt bis meters Meter. Die Kamera läuft in Schritten von step Pixeln voran.
@@ -396,11 +168,14 @@ function analyse(r, { label }) {
     if (meterOf(x) < unlockMeter(tag) - 1e-6) bad(`${what} (${tag}) bei ${meterOf(x).toFixed(1)} m, frei ab ${unlockMeter(tag)} m`);
   };
   for (const e of world.enemies) early(MECH_OF_KIND[e.kind], e.minX, `Gegner ${e.id}`);
-  for (const h of world.hazards) early(MECH_OF_KIND[h.kind], h.kind === 'lightning' ? h.x - h.w / 2 : h.x, `Hindernis ${h.id}`);
+  for (const h of world.hazards) early(MECH_OF_KIND[h.kind], hazardLeft(h), `Hindernis ${h.id}`);
   for (const z of world.zones) early(MECH_OF_KIND[z.kind], z.x, `Zone ${z.id}`);
   for (const p of world.platforms) {
     if (p.kind === 'moving') early('moving', p.ox - Math.abs(p.ax), `Plattform ${p.id}`);
     if (p.kind === 'breakable') early('breakable', p.x, `Plattform ${p.id}`);
+    if (p.kind === 'spring') early('spring', p.x, `Plattform ${p.id}`);
+    if (p.kind === 'blink') early('blink', p.x, `Plattform ${p.id}`);
+    if (p.slick) early('ice', p.x, `Plattform ${p.id}`);
   }
   for (const st of world.stars) if (st.falling) early('fallingstar', st.x, `Stern ${st.id}`);
   for (const pu of world.powerups) early('powerup', pu.x, `Powerup ${pu.id}`);
@@ -408,7 +183,7 @@ function analyse(r, { label }) {
   // Kein Gegner oder Hindernis in den ersten SAFE_START Pixeln eines Chunks
   const danger = [
     ...world.enemies.map((e) => ({ id: e.id, x: e.minX, what: e.kind })),
-    ...world.hazards.map((h) => ({ id: h.id, x: h.kind === 'lightning' ? h.x - h.w / 2 : h.x, what: h.kind })),
+    ...world.hazards.map((h) => ({ id: h.id, x: hazardLeft(h), what: h.kind })),
   ];
   for (const d of danger) {
     const c = chunkOfId(log, d.id);
@@ -435,12 +210,18 @@ const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1);
 
 // ---------- Test Bibliothek ----------
 
-test('Test Chunks: mindestens 8 verschiedene Tags, diff 1 bis 5, verschiedene min Werte', () => {
+test('Test Chunks: alle Mechaniken, diff 1 bis 9,4, dicht genug für die ganze Kurve', () => {
   const tags = new Set(TEST_LIB.flatMap((c) => c.mech));
-  assert.ok(tags.size >= 8, `nur ${tags.size} Tags`);
-  assert.ok(TEST_LIB.some((c) => c.diff === 1) && TEST_LIB.some((c) => c.diff === 5));
-  assert.ok(new Set(TEST_LIB.map((c) => c.min)).size >= 5);
-  assert.ok(TEST_LIB.length >= 8);
+  for (const tag of ['spring', 'ice', 'blink', 'comet', 'hailcloud', 'walker', 'jumper', 'flyer', 'charger', 'lightning', 'wind', 'moving', 'breakable']) {
+    assert.ok(tags.has(tag), `Tag ${tag} fehlt`);
+  }
+  assert.ok(TEST_LIB.some((c) => c.diff === 1) && TEST_LIB.some((c) => c.diff >= 9.4));
+  assert.ok(new Set(TEST_LIB.map((c) => c.min)).size >= 12);
+  // Zu jeder Stelle der Kurve gibt es mehrere Chunks innerhalb von 0,6 um die Zieldifficulty
+  for (let m = 300; m <= 4000; m += 100) {
+    const near = TEST_LIB.filter((c) => !c.rest && m >= c.min && m < c.max && Math.abs(c.diff - difficultyAt(m)) <= 0.6 + 1e-9);
+    assert.ok(near.length >= 2, `bei ${m} m nur ${near.length} Chunks nahe der Kurve ${difficultyAt(m).toFixed(1)}`);
+  }
 });
 
 for (const chunk of TEST_LIB) {
@@ -470,19 +251,190 @@ test(`${REAL_NOTE}: 40 Seeds bis 8000 m halten alle Regeln`, () => {
   assert.deepEqual(problems.slice(0, 12), []);
 });
 
-test('Weltgröße: Schwierigkeit steigt über die Abschnitte', () => {
-  const avg = (log, a, b) => {
-    const xs = log.filter((c) => !c.rest && c.meter >= a && c.meter < b).map((c) => c.diff);
-    return xs.reduce((p, q) => p + q, 0) / Math.max(1, xs.length);
-  };
-  let early = 0;
-  let late = 0;
-  for (const seed of [1, 2, 3, 4, 5]) {
-    const r = drive(seed, TEST_LIB);
-    early += avg(r.log, 250, 800);
-    late += avg(r.log, 3700, 8000);
+// Mittlere Schwierigkeit der normalen Chunks (ohne Ruhepausen) zwischen zwei Metern, über mehrere Seeds
+function meanDiff(logs, a, b) {
+  const xs = logs.flatMap((log) => log.filter((c) => !c.rest && c.meter >= a && c.meter < b).map((c) => c.diff));
+  return xs.reduce((p, q) => p + q, 0) / Math.max(1, xs.length);
+}
+
+test('Weltgröße: Schwierigkeit steigt über die Abschnitte bis in den Albtraum', () => {
+  const logs = [1, 2, 3, 4, 5, 6].map((seed) => drive(seed, TEST_LIB, { meters: 4600 }).log);
+  const steps = [[250, 800], [800, 1200], [1200, 1700], [1700, 2400], [2400, 3200], [3200, 4000]];
+  const means = steps.map(([a, b]) => meanDiff(logs, a, b));
+  for (let i = 1; i < means.length; i++) assert.ok(means[i] > means[i - 1] + 0.4, `Abschnitt ab ${steps[i][0]} m: ${means.map((m) => m.toFixed(2)).join(' < ')}`);
+  assert.ok(means[0] < 3.3, `Anfang ${means[0].toFixed(2)}`);
+  // Albtraum: bei 3200 m und danach liegen die Chunks im Mittel bei mindestens 8,5
+  for (const [a, b] of [[3200, 3700], [3700, 4600]]) {
+    const m = meanDiff(logs, a, b);
+    assert.ok(m >= 8.5, `${a} bis ${b} m: mittlere Schwierigkeit ${m.toFixed(2)}`);
   }
-  assert.ok(late - early > 5 * 1.2, `früh ${(early / 5).toFixed(2)}, spät ${(late / 5).toFixed(2)}`);
+  assert.ok(difficultyAt(3200) >= 8.5 && difficultyAt(3200) <= 9);
+});
+
+// ---------- Auswahl nach Zieldifficulty ----------
+
+test('Gewicht nach Abstand: am meisten nahe dem Ziel, 2,5 Stufen darunter höchstens ein Zehntel', () => {
+  for (const target of [1, 3.8, 6.2, 9]) {
+    assert.equal(diffFit(target, target), 1);
+    // Ein Stück darüber (erlaubt sind bis +0,6) fällt sanft ab, darunter stärker, alles bleibt endlich und positiv
+    let prev = 1;
+    for (let d = 0.05; d <= 0.6 + 1e-9; d += 0.05) {
+      const f = diffFit(target + d, target);
+      assert.ok(f < prev && f > 0.5, `+${d.toFixed(2)}: ${f}`);
+      prev = f;
+    }
+    prev = 1;
+    for (let u = 0.05; u <= 9; u += 0.05) {
+      const f = diffFit(target - u, target);
+      assert.ok(f < prev && f > 0 && Number.isFinite(f), `-${u.toFixed(2)}: ${f}`);
+      prev = f;
+    }
+    assert.ok(diffFit(target - 0.5, target) > 0.6, 'nahe dem Ziel bleibt das Gewicht hoch');
+    assert.ok(diffFit(target - 1, target) < 0.3, 'eine Stufe darunter ist es schon deutlich weniger');
+    assert.ok(diffFit(target - 2.5, target) <= 0.1, 'ab 2,5 Stufen darunter höchstens ein Zehntel');
+    assert.ok(diffFit(target - 2.5, target) < diffFit(target - 1.5, target) && diffFit(target - 5, target) < diffFit(target - 4, target));
+  }
+  // Auch weit unter dem Ziel bleibt die Reihenfolge erhalten: von zwei zu leichten Chunks gewinnt der schwerere deutlich
+  assert.ok(diffFit(5, 9) > 2 * diffFit(4, 9) * 0.99 && diffFit(5, 9) > 2 * diffFit(3, 9));
+  // Ungültige Werte stören nicht
+  for (const bad of [NaN, undefined, Infinity, -Infinity]) {
+    assert.ok(Number.isFinite(diffFit(bad, 5)) && Number.isFinite(diffFit(5, bad)));
+  }
+});
+
+test('Auswahl: Chunks weit unter dem Ziel kommen selten vor, Chunks nahe dem Ziel am häufigsten', () => {
+  // Je fünf gleich gebaute Chunks mit Schwierigkeit 2,5 / 3,5 / 4,5 / 5,5. Zwischen 1300 und 1500 m liegt das Ziel bei 5,2 bis 5,7.
+  const levels = [2.5, 3.5, 4.5, 5.5];
+  const lib = [TEST_LIB[0]];
+  for (const diff of levels) {
+    for (let i = 1; i <= 5; i++) {
+      lib.push({
+        id: `d${diff}-${i}`, name: `Stufe ${diff}`, diff, weight: 2, min: 0, max: Infinity, mech: [],
+        build(b) {
+          const a = b.ground(0, 0, 300);
+          const h = b.ground(300 + hop(b, 0, 0, 0.7), 0, 500 + 20 * i);
+          b.starsOver(h, 3, 60);
+          b.route(a, h);
+        },
+      });
+    }
+  }
+  const count = Object.fromEntries(levels.map((d) => [d, 0]));
+  for (let seed = 1; seed <= 60; seed++) {
+    const r = drive(seed, lib, { meters: 1500 });
+    for (const c of r.log) if (!c.rest && c.meter >= 1300 && c.meter < 1500) count[c.diff]++;
+  }
+  const all = levels.reduce((p, d) => p + count[d], 0);
+  assert.ok(all > 400, `nur ${all} Chunks`);
+  assert.ok(count[5.5] > count[4.5] && count[4.5] > count[3.5], JSON.stringify(count));
+  assert.ok(count[3.5] / all < 0.04 && count[2.5] / all < 0.03, `weit unter dem Ziel: ${JSON.stringify(count)}`);
+  assert.ok(count[5.5] / all > 0.65 && count[4.5] / all < 0.35, `nahe dem Ziel: ${JSON.stringify(count)}`);
+});
+
+test('Auswahl: fehlt die Schwierigkeit der Kurve in der Bibliothek, gewinnt der schwerste Chunk', () => {
+  // Nur Chunks bis Schwierigkeit 4, die Kurve liegt bei 3200 m und mehr bei 9
+  const levels = [1.5, 2.5, 3, 3.5, 4];
+  const lib = [TEST_LIB[0]];
+  for (const diff of levels) {
+    for (let i = 1; i <= 3; i++) {
+      lib.push({
+        id: `l${diff}-${i}`, name: `Stufe ${diff}`, diff, weight: 2, min: 0, max: Infinity, mech: [],
+        build(b) {
+          const a = b.ground(0, 0, 300);
+          const h = b.ground(300 + hop(b, 0, 0, 0.7), 0, 500 + 20 * i);
+          b.starsOver(h, 3, 60);
+          b.route(a, h);
+        },
+      });
+    }
+  }
+  const count = Object.fromEntries(levels.map((d) => [d, 0]));
+  for (let seed = 1; seed <= 20; seed++) {
+    const r = drive(seed, lib, { meters: 3800 });
+    for (const c of r.log) if (!c.rest && c.meter >= 3300) count[c.diff]++;
+  }
+  const all = levels.reduce((p, d) => p + count[d], 0);
+  assert.ok(count[4] / all > 0.3, JSON.stringify(count));
+  assert.ok(count[4] > count[3.5] && count[3.5] > count[3] && count[3] > count[2.5] && count[2.5] > count[1.5], JSON.stringify(count));
+});
+
+// ---------- Tore ----------
+
+test('Tore stehen nahe bei gateMeter(n), auch wenn die Chunks mit der Schwierigkeit länger werden', () => {
+  for (const [name, lib] of [['Test Chunks', TEST_LIB], ['echte Bibliothek', CHUNKS]]) {
+    const dev = [];
+    for (let seed = 1; seed <= 20; seed++) {
+      const r = drive(seed, lib, { meters: 6000, every: 1e9 });
+      for (const c of r.log) if (c.gate) dev.push(meterOf(c.gateX) - gateMeter(c.gate));
+    }
+    const mean = dev.reduce((p, q) => p + q, 0) / dev.length;
+    assert.ok(dev.length >= 150, `nur ${dev.length} Tore`);
+    assert.ok(Math.abs(mean) < 10, `${name}: im Mittel ${mean.toFixed(1)} m neben der Marke`);
+    assert.ok(dev.every((d) => Math.abs(d) < 40), `${name}: größte Abweichung ${Math.max(...dev.map(Math.abs)).toFixed(1)} m`);
+  }
+});
+
+// ---------- Powerups ----------
+
+// Abstände zwischen Powerups (Meter) für eine Welt bis meters, der Anfang bei 0 und das Ende zählen mit
+function powerGaps(seed, lib, meters = 8000) {
+  const r = drive(seed, lib, { meters, every: 1e9 });
+  const at = r.world.powerups.map((pu) => meterOf(pu.x)).filter((m) => m <= meters).sort((p, q) => p - q);
+  const gaps = [];
+  let prev = 0;
+  for (const m of [...at, meters]) {
+    gaps.push(m - prev);
+    prev = m;
+  }
+  return { gaps, count: at.length };
+}
+
+test('Powerups: nach langer Dürre bekommen Ruhechunks mit Powerups mehr Gewicht', () => {
+  // Gleiche Ruhechunks, zwei mit und vier ohne Powerup. Ohne Ausgleich läge der Anteil bei einem Drittel.
+  const mk = (id, power) => ({
+    id, name: id, diff: 1, weight: 2, min: 300, max: Infinity, mech: power ? ['powerup'] : [], rest: true,
+    build(b) {
+      const g = b.ground(0, 0, 560);
+      if (power) b.powerup('shield', 280, -70);
+      b.starsOver(g, 5, 55);
+      b.route(g);
+    },
+  });
+  const lib = [...TEST_LIB.slice(0, 8).filter((c) => c.id !== 't-gift'), mk('rp1', true), mk('rp2', true), mk('rn1', false), mk('rn2', false), mk('rn3', false), mk('rn4', false)];
+  let withPower = 0;
+  let rests = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    const r = drive(seed, lib, { meters: 4000, every: 1e9 });
+    for (const c of r.log) {
+      if (c.step === 'normal' || c.gate || !/^r[pn]/.test(c.id)) continue;
+      rests++;
+      if (c.id.startsWith('rp')) withPower++;
+    }
+  }
+  assert.ok(rests > 150, `nur ${rests} Ruhepausen`);
+  assert.ok(withPower / rests > 0.6, `Anteil ${(withPower / rests).toFixed(2)} bei ${rests} Ruhepausen`);
+});
+
+test('Powerups mit der echten Bibliothek: fast immer höchstens 400 Meter zwischen zwei Powerups (40 Seeds)', (tc) => {
+  let count = 0;
+  let sum = 0;
+  let n = 0;
+  let worst = 0;
+  let long = 0;
+  for (const seed of SEEDS) {
+    const r = powerGaps(seed, CHUNKS);
+    count += r.count;
+    for (const g of r.gaps) {
+      sum += g;
+      n++;
+      worst = Math.max(worst, g);
+      if (g > 400) long++;
+    }
+  }
+  tc.diagnostic(`Powerups: ${(count / SEEDS.length).toFixed(1)} je 8000 m, mittlerer Abstand ${(sum / n).toFixed(0)} m, größter ${worst.toFixed(0)} m, ${long} von ${n} Abständen über 400 m`);
+  assert.ok(sum / n <= 300, `mittlerer Abstand ${(sum / n).toFixed(0)} m`);
+  assert.ok(long / n < 0.1, `${long} von ${n} Abständen über 400 m`);
+  assert.ok(worst < 1200, `größter Abstand ${worst.toFixed(0)} m`);
 });
 
 // ---------- Determinismus ----------
@@ -608,44 +560,117 @@ test('Abwechslung: gleiche Mechanik nicht endlos hintereinander', () => {
   assert.ok(run3 <= 3, `${run3} Folgen mit viermal derselben Mechanik`);
 });
 
-test('Einführung: neue Mechaniken erscheinen bald nach ihrer Freischaltung', () => {
-  const unlock = (tag) => Math.min(...SECTIONS.filter((sec) => sec.mech.includes(tag)).map((sec) => sec.from));
-  const delays = { walker: [], moving: [], breakable: [], wind: [] };
-  for (let seed = 1; seed <= 20; seed++) {
-    const r = drive(seed, TEST_LIB, { meters: 2200 });
-    for (const tag of Object.keys(delays)) {
+test('Einführung: jede Mechanik erscheint innerhalb von 250 Metern nach ihrer Freischaltung', () => {
+  const tags = ['walker', 'spike', 'moving', 'rain', 'spring', 'breakable', 'jumper', 'lightning', 'ice', 'wind', 'flyer', 'charger', 'blink', 'hailcloud', 'comet'];
+  const delays = Object.fromEntries(tags.map((tag) => [tag, []]));
+  for (let seed = 1; seed <= 24; seed++) {
+    const r = drive(seed, TEST_LIB, { meters: 2300 });
+    for (const tag of tags) {
       const first = r.log.find((c) => c.tags.includes(tag));
       assert.ok(first, `Seed ${seed}: ${tag} kommt nie vor`);
-      delays[tag].push(first.meter - unlock(tag));
+      delays[tag].push(first.meter - unlockMeter(tag));
     }
   }
   const mean = (a) => a.reduce((p, q) => p + q, 0) / a.length;
   for (const [tag, d] of Object.entries(delays)) {
-    assert.ok(mean(d) < 100, `${tag}: im Mittel ${mean(d).toFixed(0)} m nach der Freischaltung`);
-    assert.ok(Math.max(...d) < 260, `${tag}: spätestens ${Math.max(...d).toFixed(0)} m nach der Freischaltung`);
+    assert.ok(Math.min(...d) >= -1e-6, `${tag}: schon vor der Freischaltung`);
+    assert.ok(mean(d) < 120, `${tag}: im Mittel ${mean(d).toFixed(0)} m nach der Freischaltung`);
+    assert.ok(Math.max(...d) < 250, `${tag}: spätestens ${Math.max(...d).toFixed(0)} m nach der Freischaltung`);
   }
+});
+
+test('Einführung mit der echten Bibliothek: was die Chunks zeigen können, erscheint bald nach dem frühesten Chunk', () => {
+  // Frühester möglicher Meter einer Mechanik: Freischaltung oder kleinstes min eines passenden Chunks. Was die
+  // Bibliothek (noch) nicht zeigt, wird nicht geprüft.
+  const tags = ['walker', 'spike', 'moving', 'rain', 'spring', 'breakable', 'jumper', 'lightning', 'ice', 'wind', 'flyer', 'charger', 'blink', 'hailcloud', 'comet'];
+  const first = {};
+  for (const tag of tags) {
+    const mins = CHUNKS.filter((c) => !c.rest && c.mech.includes(tag)).map((c) => c.min);
+    if (mins.length) first[tag] = Math.max(unlockMeter(tag), Math.min(...mins));
+  }
+  assert.ok(Object.keys(first).length >= 8, `nur ${Object.keys(first).join(', ')}`);
+  for (let seed = 1; seed <= 16; seed++) {
+    const r = drive(seed, CHUNKS, { meters: 2600 });
+    for (const [tag, from] of Object.entries(first)) {
+      const hit = r.log.find((c) => c.tags.includes(tag));
+      assert.ok(hit, `Seed ${seed}: ${tag} kommt bis 2600 m nie vor`);
+      assert.ok(hit.meter - from < 250, `Seed ${seed}: ${tag} erst ${(hit.meter - from).toFixed(0)} m nach dem frühesten Zeitpunkt (${from} m)`);
+    }
+  }
+});
+
+test('Einführung: ein Chunk, der eine Mechanik nur nennt, aber nicht baut, blockiert die Auswahl nicht', () => {
+  // Der Lügner nennt "ice" (frei ab 800 m), baut aber nur eine gewöhnliche Wolke. Echte Eis Chunks gibt es in dieser Bibliothek nicht.
+  const liar = {
+    id: 'x-liar', name: 'Lügner', diff: 4, weight: 2, min: 800, max: Infinity, mech: ['ice'],
+    build(b) {
+      const a = b.ground(0, 0, 300);
+      const h = b.ground(300 + hop(b, 0, 0, 0.7), 0, 520);
+      b.starsOver(h, 3, 60);
+      b.route(a, h);
+    },
+  };
+  const lib = [...TEST_LIB.filter((c) => !c.mech.includes('ice')), liar];
+  let liars = 0;
+  let all = 0;
+  for (let seed = 1; seed <= 12; seed++) {
+    const r = drive(seed, lib, { meters: 3000 });
+    assert.equal(r.stats.rejects, 0);
+    const mine = r.log.filter((c) => c.id === 'x-liar');
+    assert.ok(mine.length > 0 && mine[0].meter - 800 < 250, `Seed ${seed}: der Lügner erscheint nie oder zu spät`);
+    for (const c of r.log) {
+      if (c.rest || c.meter < 1100) continue;
+      all++;
+      if (c.id === 'x-liar') liars++;
+    }
+  }
+  assert.ok(liars / all < 0.15, `Anteil ${(100 * liars / all).toFixed(1)} Prozent nach 1100 m`);
 });
 
 // ---------- Ereignisse ----------
 
-test('enemyBoost verdoppelt das Gewicht von Chunks mit Gegnern', () => {
-  const share = (boost) => {
-    let enemy = 0;
-    let all = 0;
-    for (let seed = 1; seed <= 12; seed++) {
-      const r = drive(seed, TEST_LIB, { meters: 3500, setup: (s) => { s.events.enemyBoost = boost; } });
-      for (const c of r.log) {
-        if (c.meter < 1700 || c.rest) continue;
-        all++;
-        if (c.enemies) enemy++;
+// Zwillings Bibliothek: sechs Chunks mit Gegner und sechs ohne, sonst gleich (Schwierigkeit, Gewicht, Länge).
+// So zeigt sich allein der Einfluss von enemyBoost.
+function twinLib(kind, min) {
+  const mk = (id, withEnemy) => ({
+    id, name: id, diff: 3, weight: 2, min, max: Infinity, mech: withEnemy ? [kind] : [],
+    build(b) {
+      const a = b.ground(0, 0, 300);
+      const h = b.ground(300 + hop(b, 0, 0, 0.7), 0, 520);
+      if (withEnemy && kind === 'walker') b.walker(h, 0.5);
+      if (withEnemy && kind === 'hailcloud') b.hailcloud(h.x - b.ox + 330, -202);
+      b.starsOver(h, 3, 60);
+      b.route(a, h);
+    },
+  });
+  return [TEST_LIB[0], ...[1, 2, 3, 4, 5, 6].map((i) => mk(`e${i}`, true)), ...[1, 2, 3, 4, 5, 6].map((i) => mk(`p${i}`, false))];
+}
+
+for (const [kind, min, upTo] of [['walker', 300, 1900], ['hailcloud', 1250, 2700]]) {
+  test(`enemyBoost verdoppelt das Gewicht von Chunks mit Gegnern (${kind})`, () => {
+    const lib = twinLib(kind, min);
+    const share = (boost) => {
+      let enemy = 0;
+      let all = 0;
+      for (let seed = 1; seed <= 24; seed++) {
+        const r = drive(seed, lib, { meters: upTo, setup: (s) => { s.events.enemyBoost = boost; } });
+        assert.equal(r.stats.rejects, 0, JSON.stringify(r.s.gen.errors.slice(0, 2)));
+        for (const c of r.log) {
+          if (c.meter < min + 100 || c.rest) continue;
+          all++;
+          if (c.enemies) enemy++;
+        }
       }
-    }
-    return enemy / all;
-  };
-  const plain = share(false);
-  const boosted = share(true);
-  assert.ok(boosted > plain + 0.04, `ohne ${plain.toFixed(2)}, mit ${boosted.toFixed(2)}`);
-});
+      return enemy / all;
+    };
+    const plain = share(false);
+    const boosted = share(true);
+    const odds = (p) => p / (1 - p);
+    assert.ok(boosted > plain + 0.06, `ohne ${plain.toFixed(2)}, mit ${boosted.toFixed(2)}`);
+    // Die Wiederholungsregeln dämpfen den Faktor 2 etwas, ein Faktor zwischen 1,3 und 3 muss es bleiben
+    assert.ok(odds(boosted) / odds(plain) > 1.3 && odds(boosted) / odds(plain) < 3, `Quotenverhältnis ${(odds(boosted) / odds(plain)).toFixed(2)}`);
+  });
+}
 
 test('starBoost: mehr Sterne', () => {
   const count = (boost) => {
@@ -667,6 +692,7 @@ test('Traumsturm: Welt wird weiter erzeugt und bleibt im Rahmen', () => {
 test('Großer Kamerasprung: die Welt holt schnell auf und bleibt im Limit', () => {
   for (const lib of [TEST_LIB, CHUNKS]) {
     const s = createState({ seed: 9 });
+    s.gen = { keepLog: true };
     initGenerator(s, lib);
     s.camX = 300000;
     const t0 = performance.now();
@@ -676,9 +702,16 @@ test('Großer Kamerasprung: die Welt holt schnell auf und bleibt im Limit', () =
     assert.ok(s.gen.nextX >= s.camX + LIMITS.GEN_AHEAD);
     assert.ok(s.platforms.length <= LIMITS.MAX_PLATFORMS && s.platforms.every((p) => p.x + p.w >= s.camX - LIMITS.CLEAN_BEHIND - 1 || p.kind === 'moving'));
     assert.deepEqual(invariants(s), []);
-    // Der Anschluss nach dem Sprung ist normal begehbar: jede Plattform vor der Kamera hat eine Nachfolgerin in Reichweite
-    const ps = s.platforms.slice().sort((a, b) => a.x - b.x);
-    for (let i = 1; i < ps.length; i++) assert.ok(ps[i].x - (ps[i - 1].x + ps[i - 1].w) < 400);
+    // Der Anschluss nach dem Sprung ist begehbar: jede Plattform der Route hinter dem Bild ist mit den physischen Grenzen
+    // (Doppelsprung, volle Reichweite, Sprungwolke) von der vorigen aus zu erreichen
+    const route = s.gen.routeLog.filter((p) => p.x > s.camX - LIMITS.CLEAN_BEHIND - 4000);
+    assert.ok(route.length > 12, `nur ${route.length} Routenplattformen`);
+    for (let i = 1; i < route.length; i++) assert.ok(hopOkMoving(route[i - 1], route[i], { safe: 1, dbl: true, minLand: 56 }), `Sprung ${route[i - 1].id} nach ${route[i].id} (${route[i].chunk})`);
+    // Die Test Chunks haben keine Sprungwolken: dort liegen die Plattformen auch in x Reihenfolge dicht beieinander
+    if (lib === TEST_LIB) {
+      const ps = s.platforms.slice().sort((a, b) => a.x - b.x);
+      for (let i = 1; i < ps.length; i++) assert.ok(ps[i].x - (ps[i - 1].x + ps[i - 1].w) < 400);
+    }
   }
 });
 
@@ -927,6 +960,99 @@ for (const heavy of [spikeHeavy, enemyHeavy, starHeavy, platformHeavy]) {
   });
 }
 
+// Hagelwolken legen im Spiel bis zu LIMITS.MAX_HAZARDS Hagelkörner in s.hazards ab. Der Generator lässt dafür
+// beim Übernehmen eines Chunks mit Hagelwolke Platz für sechs Körner frei.
+const HAIL_RESERVE = 6;
+const hailChunk = {
+  id: 'h-hail', name: 'Nur Hagel', diff: 5, weight: 5, min: 1250, max: Infinity, mech: ['hailcloud'],
+  build(b) {
+    const a = b.ground(0, 0, 300);
+    const h = b.ground(300 + hop(b, 0, 0, 0.7), 0, 640);
+    b.hailcloud(h.x - b.ox + 330, -202);
+    b.starsOver(h, 4, 60);
+    b.route(a, h);
+  },
+};
+const plainChunk = {
+  id: 'h-plain', name: 'Nur Boden', diff: 5, weight: 5, min: 1250, max: Infinity, mech: [],
+  build(b) {
+    const a = b.ground(0, 0, 300);
+    const h = b.ground(300 + hop(b, 0, 0, 0.7), 0, 600);
+    b.starsOver(h, 4, 60);
+    b.route(a, h);
+  },
+};
+
+// Zustand bei 1300 m mit n Stachelwolken im Bild (zählen als Hindernisse), ohne Tor und Ruhepause in der Nähe
+function hazardWorld(n, seed = 5, withPlain = true) {
+  const lib = withPlain ? [TEST_LIB[0], hailChunk, plainChunk] : [TEST_LIB[0], hailChunk];
+  const s = createState({ seed });
+  initGenerator(s, lib);
+  const g = s.gen;
+  g.nextX = atMeter(1300);
+  g.gateN = 3;
+  g.nextRest = 99999;
+  s.camX = g.nextX - 500;
+  const host = createStaticPlatform(s, s.camX, 360, 400);
+  s.platforms.push(host);
+  for (let i = 0; i < n; i++) s.hazards.push(createSpike(s, host, (i % 10) / 10));
+  ensureAhead(s, lib);
+  return s;
+}
+
+test('Hagelwolken: mit Platz für sechs Körner im Hindernislimit wird der Chunk gebaut', () => {
+  // Der Chunk mit Hagelwolke ist die einzige Wahl für normale Rollen: passt er ins Limit, muss er kommen
+  for (let seed = 1; seed <= 12; seed++) {
+    const s = hazardWorld(LIMITS.MAX_HAZARDS - HAIL_RESERVE, seed, false);
+    assert.ok(s.enemies.some((e) => e.kind === 'hailcloud'), `Seed ${seed}: keine Hagelwolke trotz Platz`);
+    assert.ok(s.hazards.length <= LIMITS.MAX_HAZARDS - HAIL_RESERVE, `Hindernisse ${s.hazards.length}`);
+    assert.ok(s.gen.nextX >= s.camX + LIMITS.GEN_AHEAD);
+  }
+});
+
+test('Hagelwolken: ohne Platz für sechs Körner wird kein Chunk mit Hagelwolke übernommen, die Welt geht trotzdem weiter', () => {
+  for (let seed = 1; seed <= 12; seed++) {
+    const s = hazardWorld(LIMITS.MAX_HAZARDS - HAIL_RESERVE + 1, seed);
+    assert.ok(s.enemies.every((e) => e.kind !== 'hailcloud'), `Seed ${seed}: Hagelwolke trotz vollem Hindernislimit`);
+    assert.ok(s.gen.nextX >= s.camX + LIMITS.GEN_AHEAD, 'die Welt endet im Bild');
+    assert.deepEqual(invariants(s), []);
+  }
+  // Auch ganz voll: nichts wird über das Limit hinaus gebaut
+  const full = hazardWorld(LIMITS.MAX_HAZARDS);
+  assert.equal(full.hazards.length, LIMITS.MAX_HAZARDS);
+  assert.ok(full.enemies.every((e) => e.kind !== 'hailcloud'));
+});
+
+test('Hagelwolken: lauter Hagel Chunks halten die Limits auch mit Hagel im Spiel', () => {
+  const lib = [TEST_LIB[0], hailChunk];
+  const s = createState({ seed: 6 });
+  s.gen = { keepLog: true };
+  initGenerator(s, lib);
+  let maxHazards = 0;
+  let holes = 0;
+  for (let n = 1; n <= 1800; n++) {
+    s.camX = atMeter(1250) + n * 40;
+    s.gen.nextX = Math.max(s.gen.nextX, s.camX);
+    ensureAhead(s, lib);
+    // Wie im Spiel: jede Hagelwolke im Bild legt bei Gelegenheit drei Körner ab, solange es das Limit erlaubt
+    if (n % 20 === 0) {
+      for (const e of s.enemies) {
+        if (e.kind === 'hailcloud' && e.x > s.camX && e.x < s.camX + W && s.hazards.length + 3 <= LIMITS.MAX_HAZARDS) {
+          for (let k = 0; k < 3; k++) s.hazards.push({ id: s.nextId++, kind: 'hail', x: e.x + k * 10, y: e.y + 30, w: 18, h: 18, vx: 0, vy: 300, life: 3, anim: 0 });
+        }
+      }
+    }
+    // Hagel fällt aus dem Bild
+    if (n % 20 === 10) s.hazards = s.hazards.filter((h) => h.kind !== 'hail');
+    maxHazards = Math.max(maxHazards, s.hazards.length);
+    if (s.gen.nextX < s.camX + W) holes++;
+  }
+  assert.equal(holes, 0, 'die Welt darf im Bild nie enden');
+  assert.ok(maxHazards <= LIMITS.MAX_HAZARDS, `Hindernisse ${maxHazards}`);
+  assert.ok(s.gen.stats.chunks > 50, `${s.gen.stats.chunks} Chunks`);
+  assert.deepEqual(invariants(s), []);
+});
+
 // ---------- cleanup ----------
 
 test('cleanup entfernt alles links von camX minus CLEAN_BEHIND, tote Gegner und eingesammelte Sterne', () => {
@@ -964,6 +1090,13 @@ test('cleanup entfernt alles links von camX minus CLEAN_BEHIND, tote Gegner und 
   s.powerups.push(mark(createPowerup(s, 'dash', 1000, 300), true), mark(createPowerup(s, 'dash', 2200, 300), false), mark(takenUp, true));
   s.gates.push(mark(createGate(s, 1000, 360, 1), true), mark(createGate(s, 2400, 360, 2), false));
 
+  // Neue Objekte: Sprung und Blinkwolke, Hagelwolke, Hagel, Komet (seine Mitte liegt in x, er reicht 40 px nach links und rechts)
+  s.platforms.push(mark(createSpringPlatform(s, 1000, 300, 100), true), mark(createSpringPlatform(s, 2100, 300, 100), false),
+    mark(createBlinkPlatform(s, 1500, 300, 100), true), mark(createBlinkPlatform(s, 1600, 300, 100), false)); // endet bei 1600 und 1700
+  s.enemies.push(mark(createHailcloud(s, 1000, 200), true), mark(createHailcloud(s, 2200, 200), false));
+  s.hazards.push(mark(createHail(s, 1000, 200, 0, 300), true), mark(createHail(s, 2100, 200, 0, 300), false),
+    mark(createComet(s, lim - 50, 360), true), mark(createComet(s, lim - 30, 360), false));
+
   const arrays = LISTS.map((k) => s[k]);
   cleanup(s);
   LISTS.forEach((k, i) => assert.equal(s[k], arrays[i], `${k}: dieselbe Liste`));
@@ -1000,7 +1133,7 @@ test('Hinweise: jede neue Mechanik wird einmal eingereiht', () => {
     assert.equal(h.text, HINTS[h.mech]);
     assert.ok(Number.isFinite(h.x));
   }
-  for (const tag of ['walker', 'spike', 'moving', 'rain', 'breakable', 'jumper', 'lightning', 'wind', 'flyer', 'charger']) {
+  for (const tag of ['walker', 'spike', 'moving', 'rain', 'breakable', 'jumper', 'lightning', 'wind', 'flyer', 'charger', 'spring', 'ice', 'blink', 'hailcloud', 'comet']) {
     assert.ok(mechs.includes(tag), `Hinweis ${tag} fehlt`);
   }
   // x liegt an der ersten Stelle, an der die Mechanik wirklich vorkommt
@@ -1010,12 +1143,21 @@ test('Hinweise: jede neue Mechanik wird einmal eingereiht', () => {
     spike: Math.min(...w.hazards.filter((e) => e.kind === 'spike').map((e) => e.x)),
     rain: Math.min(...w.zones.filter((e) => e.kind === 'rain').map((e) => e.x)),
     breakable: Math.min(...w.platforms.filter((e) => e.kind === 'breakable').map((e) => e.x)),
+    spring: Math.min(...w.platforms.filter((e) => e.kind === 'spring').map((e) => e.x)),
+    blink: Math.min(...w.platforms.filter((e) => e.kind === 'blink').map((e) => e.x)),
+    ice: Math.min(...w.platforms.filter((e) => e.slick).map((e) => e.x)),
+    hailcloud: Math.min(...w.enemies.filter((e) => e.kind === 'hailcloud').map((e) => e.x)),
+    comet: Math.min(...w.hazards.filter((e) => e.kind === 'comet').map((e) => e.x - e.w / 2)),
   };
   for (const [tag, x] of Object.entries(first)) assert.equal(q.find((h) => h.mech === tag).x, x, tag);
 });
 
+// Markiert alle Tipps als gezeigt, damit nur die Hinweise der Mechaniken geprüft werden
+const silenceTips = (s) => { for (const tip of TIPS) s.hints.shown[tip.id] = true; };
+
 test('Hinweise: updateHints zeigt sie als Banner, einmal pro Mechanik', () => {
   const s = createState({ seed: 3 });
+  silenceTips(s);
   s.hints.queue.push({ x: 5000, text: HINTS.walker, mech: 'walker' }, { x: 6000, text: HINTS.spike, mech: 'spike' });
   s.player.x = 5000 - 300;
   updateHints(s);
@@ -1044,6 +1186,7 @@ test('Hinweise: updateHints zeigt sie als Banner, einmal pro Mechanik', () => {
 
 test('Hinweise: veraltete Hinweise verfallen, tote Spieler und NaN stören nicht', () => {
   const s = createState({ seed: 3 });
+  silenceTips(s);
   s.hints.queue.push({ x: 1000, text: HINTS.rain, mech: 'rain' });
   s.player.x = 5000;
   s.banner = { text: 'x', sub: '', t: 0, dur: 2 };
@@ -1065,6 +1208,126 @@ test('Hinweise: veraltete Hinweise verfallen, tote Spieler und NaN stören nicht
   s.mode = 'playing';
   updateHints(s);
   assert.equal(s.banner.text, HINTS.wind);
+});
+
+// ---------- Tipps zu den Fähigkeiten ----------
+
+test('Tipps: Daten in constants.js sind vollständig und ohne Gedankenstriche', () => {
+  assert.ok(TIPS.length >= 4);
+  assert.equal(new Set(TIPS.map((x) => x.id)).size, TIPS.length, 'doppelte ids');
+  for (const tip of TIPS) {
+    assert.ok(typeof tip.id === 'string' && tip.id && typeof tip.text === 'string' && tip.text.length > 5 && Number.isFinite(tip.at) && tip.at > 0);
+    assert.ok(!/[\u2013\u2014]/.test(tip.text) && !/^\s*-/.test(tip.text), tip.text);
+    assert.ok(!(tip.id in HINTS), `${tip.id} kollidiert mit einer Mechanik`);
+  }
+  for (let i = 1; i < TIPS.length; i++) assert.ok(TIPS[i].at > TIPS[i - 1].at, 'in der Reihenfolge der Meter');
+});
+
+test('Tipps: jeder erscheint einmal pro Lauf als Banner, sobald der Spieler die Meter erreicht', () => {
+  const s = createState({ seed: 4 });
+  for (const tip of TIPS) {
+    s.player.x = atMeter(tip.at - 1);
+    s.banner = null;
+    updateHints(s);
+    assert.equal(s.banner, null, `${tip.id} zu früh`);
+    assert.ok(!s.hints.shown[tip.id]);
+    s.player.x = atMeter(tip.at);
+    updateHints(s);
+    assert.ok(s.banner, `${tip.id} fehlt`);
+    assert.equal(s.banner.text, tip.text);
+    assert.equal(s.banner.sub, '');
+    assert.ok(s.banner.dur > 2 && s.banner.dur < 6);
+    assert.equal(s.hints.shown[tip.id], true);
+    // Nochmal an derselben Stelle: kein zweites Mal
+    s.banner = null;
+    updateHints(s);
+    updateHints(s);
+    assert.equal(s.banner, null, `${tip.id} kommt ein zweites Mal`);
+  }
+  // Weit hinten im Lauf kommt nichts mehr
+  s.player.x = atMeter(5000);
+  updateHints(s);
+  assert.equal(s.banner, null);
+  // Ein neuer Lauf (neuer Zustand) zeigt sie wieder
+  const fresh = createState({ seed: 4 });
+  fresh.player.x = atMeter(TIPS[0].at + 1);
+  updateHints(fresh);
+  assert.equal(fresh.banner.text, TIPS[0].text);
+});
+
+test('Tipps: ein laufendes Banner hat Vorrang, der Tipp wartet danach', () => {
+  const s = createState({ seed: 4 });
+  s.player.x = atMeter(TIPS[1].at + 1);
+  s.hints.shown[TIPS[0].id] = true;
+  s.banner = { text: 'Traumwelt 2', sub: '', t: 0, dur: 2.6 };
+  updateHints(s);
+  assert.equal(s.banner.text, 'Traumwelt 2');
+  assert.ok(!s.hints.shown[TIPS[1].id]);
+  s.banner = null;
+  updateHints(s);
+  assert.equal(s.banner.text, TIPS[1].text);
+});
+
+test('Tipps: mehrere fällige Tipps kommen nacheinander, einer pro Banner, in der Reihenfolge der Meter', () => {
+  const s = createState({ seed: 4 });
+  s.player.x = atMeter(TIPS[TIPS.length - 1].at + 10);
+  const seen = [];
+  for (let i = 0; i < TIPS.length + 2; i++) {
+    updateHints(s);
+    if (s.banner) {
+      seen.push(s.banner.text);
+      s.banner = null;
+    }
+  }
+  assert.deepEqual(seen, TIPS.map((x) => x.text));
+});
+
+test('Tipps: Hinweise zu Mechaniken kommen zuerst, ein toter oder sterbender Spieler und NaN stören nicht', () => {
+  const s = createState({ seed: 4 });
+  s.player.x = atMeter(TIPS[0].at + 1);
+  s.hints.queue.push({ x: s.player.x + 100, text: HINTS.walker, mech: 'walker' });
+  updateHints(s);
+  assert.equal(s.banner.text, HINTS.walker);
+  s.banner = null;
+  updateHints(s);
+  assert.equal(s.banner.text, TIPS[0].text);
+  // tot, sterbend, NaN
+  const d = createState({ seed: 4 });
+  d.player.x = atMeter(TIPS[0].at + 1);
+  d.player.dead = true;
+  updateHints(d);
+  d.player.dead = false;
+  d.mode = 'dying';
+  updateHints(d);
+  d.mode = 'playing';
+  d.player.x = NaN;
+  updateHints(d);
+  assert.equal(d.banner, null);
+  assert.ok(!d.hints.shown[TIPS[0].id]);
+  // fehlende Strukturen
+  const e = createState({ seed: 4 });
+  e.hints = null;
+  updateHints(e);
+  e.hints = { shown: {}, queue: [] };
+  e.run = null;
+  e.player.x = atMeter(TIPS[0].at + 1);
+  updateHints(e);
+  assert.equal(e.banner.text, TIPS[0].text);
+});
+
+test('Tipps: die Simulation ruft updateHints auf, der erste Tipp erscheint auf dem Weg', () => {
+  const s = newGame(8);
+  s.player.x = atMeter(TIPS[0].at + 2);
+  stepSim(s, input({ move: 1 }), 1 / 60);
+  assert.ok(s.banner && s.banner.text === TIPS[0].text, JSON.stringify(s.banner));
+  assert.equal(s.hints.shown[TIPS[0].id], true);
+});
+
+test('Tipps: der Zustand bleibt reine Daten', () => {
+  const s = createState({ seed: 4 });
+  s.player.x = atMeter(TIPS[0].at + 1);
+  updateHints(s);
+  assert.deepEqual(structuredClone(s.hints), s.hints);
 });
 
 // ---------- chunkAt ----------

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { H, LIGHTNING, RAIN, SPIKE, STEP, W, WIND } from '../game/constants.js';
-import { createLightning, createMovingPlatform, createRain, createSpike, createStaticPlatform, createWind } from '../game/entities.js';
+import { COMET, H, HAIL, LIGHTNING, RAIN, SPIKE, STEP, W, WIND } from '../game/constants.js';
+import { createComet, createHail, createLightning, createMovingPlatform, createRain, createSpike, createStaticPlatform, createWind } from '../game/entities.js';
 import { createState } from '../game/state.js';
 import { int, rand, range } from '../game/rng.js';
 import { emit } from '../game/particles.js';
@@ -44,9 +44,11 @@ function world({ camX = 0, seed = 5 } = {}) {
 }
 
 function add(s, o) {
-  (o.kind === 'spike' || o.kind === 'lightning' ? s.hazards : s.zones).push(o);
+  (['spike', 'lightning', 'comet', 'hail'].includes(o.kind) ? s.hazards : s.zones).push(o);
   return o;
 }
+
+const sfxCount = (s, name) => s.sfx.filter((e) => e.n === name).length;
 
 // Spieler mit Mitte cx, Füßen bei foot, ohne Schutz
 function place(s, cx, foot) {
@@ -443,6 +445,61 @@ test('Blitz: ein laufender Einschlag und die Abkühlung enden auch dann, wenn de
   assert.equal(b.timer, 1.0);
   assert.equal(b.struck, false);
 });
+
+test('Blitz: Tempo (pace) verkürzt nur die Ruhephase, die Vorwarnung bleibt mindestens 0,9 s', () => {
+  const s = world();
+  const slow = createLightning(s, 300, { idle: 1.5, pace: 1 });
+  const fast = createLightning(s, 300, { idle: 1.5, pace: 1.5 });
+  const crazy = createLightning(s, 300, { idle: 1.5, pace: 9 });
+  assert.ok(fast.idleTime < slow.idleTime);
+  assert.equal(crazy.idleTime, 0.6);
+  for (const b of [slow, fast, crazy]) {
+    const t = world();
+    t.hazards.push(b);
+    const log = trace(t, b, 10);
+    const glow = log.find((e) => e.phase === 'glow');
+    const strike = log.find((e) => e.phase === 'strike');
+    assert.ok(glow && strike);
+    assert.ok(strike.t - glow.t >= 0.9 - EPS, `Vorwarnung ${strike.t - glow.t}`);
+    within(strike.t - glow.t, LIGHTNING.GLOW + LIGHTNING.FLICKER, 'Vorwarnung', 3 * STEP);
+  }
+});
+
+test('Blitz: Ton glow zu Beginn der Vorwarnung und Ton strike beim Einschlag, jeweils einmal pro Zyklus', () => {
+  const s = world();
+  const b = createLightning(s, 300, { idle: 0.6 });
+  s.hazards.push(b);
+  let prev = b.phase;
+  let glows = 0;
+  let strikes = 0;
+  for (let i = 0; i < 60 * 12; i++) {
+    s.sfx.length = 0; // nimbus-game.js leert die Liste nach jedem Bild
+    tick(s);
+    if (b.phase === 'glow' && prev === 'idle') {
+      glows++;
+      assert.equal(sfxCount(s, 'glow'), 1);
+    } else {
+      assert.equal(sfxCount(s, 'glow'), 0, 'glow nur beim Beginn der Vorwarnung');
+    }
+    if (b.phase === 'strike' && prev !== 'strike') {
+      strikes++;
+      assert.equal(sfxCount(s, 'strike'), 1);
+    } else {
+      assert.equal(sfxCount(s, 'strike'), 0);
+    }
+    prev = b.phase;
+  }
+  assert.ok(glows >= 4 && strikes >= 4);
+  assert.equal(glows, strikes);
+});
+
+test('Blitz: ein Blitz weit außerhalb des Bildes macht keinen Ton', () => {
+  const s = world();
+  s.hazards.push(createLightning(s, 4000, { idle: 0.2 }));
+  tick(s, 60 * 10);
+  assert.equal(s.sfx.length, 0);
+});
+
 
 // ---------- Stachelwolken ----------
 
@@ -928,6 +985,48 @@ test('clearHazardsNear: vertauschte Grenzen, NaN, leere Liste, Zonen bleiben unb
   assert.equal(s.hazards.length, 0);
 });
 
+// ---------- Alle Hindernisarten zusammen ----------
+
+test('Alle Hindernisarten an einer Stelle kosten pro Schritt nur ein Leben und der Rest bleibt Daten', { skip: needsHurt }, () => {
+  const s = world();
+  const plat = createStaticPlatform(s, 100, 360, 400);
+  s.platforms.push(plat);
+  const spike = add(s, createSpike(s, plat, 0.5));
+  const light = add(s, createLightning(s, spike.x + 18, { idle: 1 }));
+  const comet = add(s, createComet(s, spike.x + 18, 360, { idle: 1 }));
+  const hail = add(s, createHail(s, spike.x + 18, 340, 0, 0));
+  light.phase = 'strike';
+  light.timer = 0.2;
+  comet.phase = 'strike';
+  comet.timer = 0.2;
+  place(s, spike.x + 18, 360);
+  playerVsHazards(s);
+  assert.equal(s.run.hits, 1);
+  assert.equal(s.lives, 49);
+  for (let i = 0; i < 5; i++) playerVsHazards(s);
+  assert.equal(s.run.hits, 1, 'unverwundbar nach dem ersten Treffer');
+  assert.ok(s.hazards.includes(spike) && s.hazards.includes(light) && s.hazards.includes(comet));
+  assert.ok(s.hazards.length === 3 || s.hazards.includes(hail));
+  assert.deepEqual(structuredClone(s.hazards), s.hazards);
+});
+
+test('updateObstacles lässt Reihenfolge und Zahl der Hindernisse bis auf verschwundene Hagelkörner unverändert', () => {
+  const s = world();
+  const plat = createStaticPlatform(s, 100, 360, 400);
+  s.platforms.push(plat);
+  const kinds = [];
+  for (let i = 0; i < 6; i++) {
+    kinds.push(add(s, createSpike(s, plat, i / 6)).id);
+    kinds.push(add(s, createComet(s, 4000 + i * 100, 360)).id);
+    add(s, createHail(s, 300 + i * 10, 330, 0, 300)); // fällt in wenigen Schritten auf die Plattform
+    kinds.push(add(s, createLightning(s, 5000 + i * 100)).id);
+  }
+  assert.equal(s.hazards.filter((h) => h.kind === 'hail').length, 6);
+  tick(s, 12);
+  assert.equal(s.hazards.filter((h) => h.kind === 'hail').length, 0, 'alle Körner sind auf der Plattform zerplatzt');
+  assert.deepEqual(s.hazards.map((h) => h.id), kinds);
+});
+
 // ---------- Zusammenspiel mit sim.js und player.js ----------
 
 test('sim: Blitz über dem stehenden Spieler trifft nach der Vorwarnung genau einmal', { skip: needsHurt }, () => {
@@ -995,8 +1094,11 @@ function randomWorld(seed) {
   }
   const n = int(r, 4, 12);
   for (let i = 0; i < n; i++) {
-    if (rand(r) < 0.5) add(s, createSpike(s, plats[int(r, 0, plats.length - 1)], rand(r)));
-    else add(s, createLightning(s, range(r, 0, 3000), { idle: range(r, 0, 3) }));
+    const roll = rand(r);
+    if (roll < 0.4) add(s, createSpike(s, plats[int(r, 0, plats.length - 1)], rand(r)));
+    else if (roll < 0.7) add(s, createLightning(s, range(r, 0, 3000), { idle: range(r, 0, 3) }));
+    else if (roll < 0.9) add(s, createComet(s, range(r, 0, 3000), range(r, 250, 400), { idle: range(r, 0, 3), dir: rand(r) < 0.5 ? -1 : 1 }));
+    else add(s, createHail(s, range(r, 0, 3000), range(r, -20, 200), range(r, -120, 120), range(r, 100, 360)));
   }
   for (let i = 0; i < 4; i++) {
     const x = range(r, 0, 3000);
@@ -1006,14 +1108,20 @@ function randomWorld(seed) {
   return { s, r };
 }
 
-// Gibt es zum Treffer einen sichtbaren Grund (Blitz in strike oder Stachelwolke)?
-function hasCause(s) {
+// Gibt es zum Treffer einen sichtbaren Grund (Blitz oder Komet in strike, Stachelwolke, Hagelkorn)?
+// hazards ist der Stand unmittelbar vor der Trefferprüfung (ein treffendes Korn ist danach aus der Liste).
+function hasCause(s, hazards) {
   const p = s.player;
   const px0 = p.x + 4;
   const px1 = p.x + p.w - 4;
   const py0 = p.y + 4;
   const py1 = p.y + p.h - 4;
-  for (const h of s.hazards) {
+  const circle = (h, r) => {
+    const dx = clamp(h.x, px0, px1) - h.x;
+    const dy = clamp(h.y, py0, py1) - h.y;
+    return dx * dx + dy * dy < r * r;
+  };
+  for (const h of hazards) {
     if (h.kind === 'lightning' && h.phase === 'strike') {
       const c = lightningColumn(h);
       if (px1 > c.x && px0 < c.x + c.w && py1 > c.y && py0 < c.y + c.h) return true;
@@ -1022,6 +1130,8 @@ function hasCause(s) {
       const b = spikeHitbox(h);
       if (px1 > b.x && px0 < b.x + b.w && py1 > b.y && py0 < b.y + b.h) return true;
     }
+    if (h.kind === 'comet' && h.phase === 'strike' && circle(h, COMET.RADIUS)) return true;
+    if (h.kind === 'hail' && circle(h, HAIL.R - 2)) return true;
   }
   return false;
 }
@@ -1041,8 +1151,14 @@ test('Fuzz: zufällige Welten, Kamerasprünge und Schrittweiten erzeugen nie NaN
       p.invuln = rand(r) < 0.2 ? 0 : p.invuln;
       const hits = s.run.hits;
       const lives = s.lives;
-      tick(s, 1, dt);
-      if (s.run.hits !== hits) assert.ok(hasCause(s), `Seed ${seed} Schritt ${i}: Treffer ohne Ursache`);
+      // Schritt wie tick, aber mit Blick auf die Hindernisse unmittelbar vor der Trefferprüfung
+      s.t += dt;
+      s.player.invuln = Math.max(0, s.player.invuln - dt);
+      updatePlatforms(s, dt);
+      updateObstacles(s, dt);
+      const seen = s.hazards.map((h) => ({ ...h }));
+      playerVsHazards(s);
+      if (s.run.hits !== hits) assert.ok(hasCause(s, seen), `Seed ${seed} Schritt ${i}: Treffer ohne Ursache`);
       assert.ok(s.lives <= lives && s.lives >= 0);
       if (rand(r) < 0.01) clearHazardsNear(s, p.x - 260, p.x + p.w + 420);
       const w = windAt(s, range(r, -100, 3500), range(r, -50, 500));
@@ -1055,6 +1171,11 @@ test('Fuzz: zufällige Welten, Kamerasprünge und Schrittweiten erzeugen nie NaN
           assert.ok(PHASES.includes(h.phase));
           assert.ok(h.charge >= 0 && h.charge <= 1 && Number.isFinite(h.timer));
         }
+        if (h.kind === 'comet') {
+          assert.ok(['idle', 'warn', 'strike', 'cooldown'].includes(h.phase));
+          assert.ok(h.charge >= 0 && h.charge <= 1 && h.progress >= 0 && h.progress <= 1 && Number.isFinite(h.timer));
+        }
+        if (h.kind === 'hail') assert.ok(Number.isFinite(h.x) && Number.isFinite(h.y) && h.life > 0);
       }
       for (const z of s.zones) if (z.kind === 'rain') assert.ok(z.intensity >= 0 && z.intensity <= 1 && Number.isFinite(z.timer));
     }

@@ -1,18 +1,23 @@
-// Welt: Plattformen, Regen und Windzonen, Stachelwolken, Blitze, Sterne, Powerups und Traumtore.
+// Welt: Plattformen (auch Sprungwolken, Eiswolken, Blinkwolken), Regen und Windzonen, Stachelwolken,
+// Blitze, Kometen, Hagel, Sterne, Powerups und Traumtore.
 //
 // Reihenfolge von hinten nach vorn: Zonen (Regen, Wind), Plattformen, Tor (Rückseite),
-// Stachelwolken, Blitze, Sterne, Powerups, Tor (Vorderseite).
+// Stachelwolken, Blitze, Kometen, Hagel, Sterne, Powerups, Tor (Vorderseite).
 // Alles hier ist eine reine Funktion von s und view. Bewegung kommt aus view.time, der Zufall
 // der Dekoration aus hash() mit der Objekt id. Es gibt keinen Zustand außerhalb von s und view.
+// Die Blinkwolke liest zusätzlich die Spielzeit s.t (der Takt Ring zeigt die Restzeit), sonst nichts.
 //
 // Kosten: Verläufe entstehen höchstens einmal pro Frame und Art (G), meist in lokalen
-// Koordinaten und mit translate wiederverwendet. Große Mengen (Sterne, Tropfen, Windlinien)
+// Koordinaten und mit translate wiederverwendet. Große Mengen (Sterne, Tropfen, Windlinien, Hagel)
 // laufen in einem Pfad und werden mit wenigen Aufrufen gezeichnet. Bei sehr vielen sichtbaren
 // Objekten werden Details weggelassen (COST und LOD), damit ein Frame in der Zeichenanzahl begrenzt bleibt.
 // Bei view.reduceMotion bleiben alle Formen und Warnungen erhalten, aber ohne Blinken,
 // Funkeln, Wackeln und Schweben. Nur Wetter und Tor bewegen sich langsamer weiter.
+// Vorwarnungen lesen sich auch ohne Farbe und ohne Bewegung: Blitz und Komet über Form, Muster und
+// einen Füllstand (Bogen, zusammenlaufende Marken), die Blinkwolke über Ring und gestrichelten Rand.
 
-import { H as H0, LIGHTNING, POWERUPS, SPIKE, W as W0, WIND } from '../constants.js';
+import { BLINK, COMET, H as H0, HAIL, LIGHTNING, POWERUPS, SPIKE, W as W0, WIND } from '../constants.js';
+import { cometHitbox, cometPosition, hailHitbox } from '../obstacles.js';
 import { themeAt } from '../theme.js';
 
 const TAU = Math.PI * 2;
@@ -20,7 +25,10 @@ const MARGIN = 150; // Objekte im Bereich minus MARGIN bis W plus MARGIN werden 
 // Geschätzte Kosten (Zeichenaufrufe) pro sichtbarem Objekt. Übersteigt die Summe LOD[0], entfallen
 // kleine Details, übersteigt sie LOD[1], bleiben nur noch die Grundformen. Im normalen Spiel
 // liegt die Summe weit darunter, die Stufen fangen nur ungewöhnlich volle Bilder ab.
-const COST = { plat: 50, star: 14, spike: 55, bolt: 75, zone: 100, power: 32, gate: 105 };
+const COST = {
+  plat: 50, spring: 70, ice: 75, iceGround: 90, blink: 55,
+  star: 14, spike: 55, bolt: 75, comet: 95, hail: 12, zone: 100, power: 32, gate: 105,
+};
 const LOD = [1700, 3000];
 const STAR_RADIUS = { normal: 10, risk: 14, event: 7 };
 const SLANT = 0.22; // Regen fällt schräg: Verschiebung in x pro Pixel Fall
@@ -73,6 +81,15 @@ const C = {
   spike: '#ffe94a', spikeEdge: '#e7a400', spikeBody: '#2b2a3c', spikeBodyHi: '#46435d',
   stormTop: '#6a7198', stormBot: '#262a46', bolt: '#fff3a0', boltCore: '#ffffff', warn: '#ffe14a', warnDark: '#2a1a00',
   rainCloudOn: '#343958', rainCloudOff: '#6c7399', rain: '#cfe4ff',
+  // Sprungwolke: warmes Koralle, in allen Welten klar anders als die kühlen Plattformen
+  spTop: '#ffd2ba', spMid: '#ff8f6c', spBot: '#d4553f', spPuff: '#e8694f', spPuffHi: '#ff9e80', spCoil: '#fff3da', spCoilDark: '#a63a2c',
+  // Eiswolke: bläulich weiß, unabhängig von der Welt
+  iceTop: '#f6fdff', iceMid: '#c9e8ff', iceBot: '#82b6ee', iceDeep: '#9ccaf4', iceEdge: '#ffffff', iceFacet: 'rgba(110,165,235,0.5)', iceGlint: '#ffffff',
+  // Blinkwolke: Mint, die einzige Farbe, die in keiner Welt sonst vorkommt
+  blTop: '#f4fffa', blMid: '#a9f0d9', blBot: '#55c4ac', blEdge: '#23857c', blRing: '#ffffff', blWarn: '#ffc83d', blWarnDark: '#7a3b00',
+  // Komet und Hagel
+  cmCore: '#fffbe9', cmHot: '#ffe29a', cmMid: '#ffa24d', cmDeep: '#ff5f3d', cmRing: '#ffd9a0', cmDark: 'rgba(52,24,62,0.55)', cmEmber: '#ff8a3a',
+  hailBody: '#e6f4ff', hailEdge: '#86aee6', hailShade: 'rgba(120,160,226,0.5)', hailTail: 'rgba(218,238,255,', hailHi: '#ffffff',
 };
 
 function makePalette(t) {
@@ -126,6 +143,18 @@ const mkSteam = (ctx) => unitRadial(ctx, [0, 'rgba(236,240,255,0.8)', 0.5, 'rgba
 const mkFlash = (ctx) => unitRadial(ctx, [0, 'rgba(255,255,236,0.95)', 0.35, 'rgba(255,240,150,0.5)', 1, 'rgba(255,230,120,0)']);
 const mkGold = (ctx) => unitRadial(ctx, [0, 'rgba(255,214,80,0.55)', 0.5, 'rgba(255,190,60,0.22)', 1, 'rgba(255,190,60,0)']);
 const mkCloudGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,248,200,1)', 0.45, 'rgba(255,226,120,0.6)', 1, 'rgba(255,210,90,0)']);
+const mkSpBody = (ctx) => vertical(ctx, 0, 16, [0, C.spTop, 0.4, C.spMid, 1, C.spBot]);
+const mkSpGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,178,128,0.75)', 0.5, 'rgba(255,140,100,0.28)', 1, 'rgba(255,140,100,0)']);
+const mkIceBody = (ctx) => vertical(ctx, 0, 16, [0, C.iceTop, 0.38, C.iceMid, 1, C.iceBot]);
+const mkIceGround = (ctx) => vertical(ctx, 0, 240, [0, C.iceTop, 0.07, C.iceMid, 0.5, '#8fbdf0', 1, '#456eb8']);
+const mkIceMist = (ctx) => unitRadial(ctx, [0, 'rgba(238,250,255,0.55)', 0.6, 'rgba(220,242,255,0.2)', 1, 'rgba(220,242,255,0)']);
+const mkBlBody = (ctx) => vertical(ctx, 0, 16, [0, C.blTop, 0.42, C.blMid, 1, C.blBot]);
+const mkCmGlow = (ctx) => unitRadial(ctx, [0, 'rgba(255,196,120,0.85)', 0.45, 'rgba(255,128,70,0.34)', 1, 'rgba(255,100,60,0)']);
+const mkCmHalo = (ctx) => unitRadial(ctx, [0, 'rgba(255,250,226,1)', 0.22, 'rgba(255,224,150,0.85)', 0.55, 'rgba(255,150,72,0.34)', 1, 'rgba(255,110,56,0)']);
+const mkCmFlash = (ctx) => unitRadial(ctx, [0, 'rgba(255,255,244,1)', 0.3, 'rgba(255,226,150,0.7)', 0.7, 'rgba(255,150,80,0.25)', 1, 'rgba(255,120,60,0)']);
+const mkCmEmber = (ctx) => unitRadial(ctx, [0, 'rgba(255,170,70,0.9)', 0.5, 'rgba(255,110,50,0.42)', 1, 'rgba(255,90,40,0)']);
+// Schweif: Einheitsform zeigt nach oben (Kopf bei y 0, Ende bei y minus 1), Kopf heiß und deckend, Ende ausgeblendet
+const mkCmTail = (ctx) => vertical(ctx, -1, 0, [0, 'rgba(255,110,60,0)', 0.45, 'rgba(255,150,76,0.42)', 1, 'rgba(255,240,196,1)']);
 
 // ---------- Pfade ----------
 
@@ -233,6 +262,30 @@ function platOk(p) {
   return !!p && p.w > 0 && Number.isFinite(p.x) && Number.isFinite(p.y) && p.w < FAR;
 }
 
+// Startpunkt der Flugbahn eines Kometen (hoch am Himmel, seitlich in Richtung dir)
+function cometStart(h) {
+  return cometPosition({ x: h.x, y: h.y, dir: h.dir, phase: 'warn', progress: 0 });
+}
+
+function cometOk(h) {
+  return !!h && h.kind === 'comet' && Number.isFinite(h.x) && Number.isFinite(h.y);
+}
+
+// Bereich in x, in dem ein Komet etwas zeichnet: die Markierung am Boden, bei Vorwarnung und Anflug die Flugbahn
+function cometSpan(h) {
+  const pad = COMET.RADIUS + 70;
+  let x0 = h.x - pad;
+  let x1 = h.x + pad;
+  if (h.phase === 'warn' || h.phase === 'strike') {
+    const a = cometStart(h);
+    x0 = Math.min(x0, a.x - 40);
+    x1 = Math.max(x1, a.x + 40);
+  }
+  return [x0, x1];
+}
+
+const platCost = (p) => (p.kind === 'spring' ? COST.spring : p.kind === 'blink' ? COST.blink : p.slick && p.kind === 'static' ? (p.ground || num(p.h, 16) > 60 ? COST.iceGround : COST.ice) : COST.plat);
+
 // Schätzt die Kosten des Bildes (siehe COST). Liegt nichts im Bild, ist das Ergebnis 0 und es wird nichts gezeichnet.
 function scan(s, cam, W) {
   const lo = cam - MARGIN;
@@ -241,10 +294,17 @@ function scan(s, cam, W) {
   for (const p of s.platforms || []) {
     if (!platOk(p)) continue;
     const e = platExtent(p);
-    if (e[1] >= lo && e[0] <= hi) cost += COST.plat;
+    if (e[1] >= lo && e[0] <= hi) cost += platCost(p);
   }
   for (const h of s.hazards || []) {
-    if (h && Number.isFinite(h.x) && h.x >= lo - 80 && h.x <= hi + 80) cost += h.kind === 'lightning' ? COST.bolt : COST.spike;
+    if (!h || !Number.isFinite(h.x)) continue;
+    if (h.kind === 'comet') {
+      if (!cometOk(h)) continue;
+      const e = cometSpan(h);
+      if (e[1] >= lo && e[0] <= hi) cost += COST.comet;
+    } else if (h.x >= lo - 80 && h.x <= hi + 80) {
+      cost += h.kind === 'lightning' ? COST.bolt : h.kind === 'hail' ? COST.hail : COST.spike;
+    }
   }
   for (const z of s.zones || []) {
     if (z && Number.isFinite(z.x) && z.w > 0 && z.x + z.w >= lo && z.x <= hi) cost += COST.zone;
@@ -289,6 +349,8 @@ export function drawWorld(ctx, s, view) {
   drawGates(f, false);
   drawSpikes(f);
   drawLightning(f);
+  drawComets(f);
+  drawHails(f);
   drawStars(f);
   drawPowerups(f);
   drawGates(f, true);
@@ -316,6 +378,9 @@ function drawPlatforms(f) {
     const p = vis[i];
     if (p.kind === 'moving') drawMoving(f, p);
     else if (p.kind === 'breakable') drawBreakable(f, p);
+    else if (p.kind === 'spring') drawSpring(f, p);
+    else if (p.kind === 'blink') drawBlink(f, p);
+    else if (p.slick) (p.ground || num(p.h, 16) > 60 ? drawIceGround : drawIceFloater)(f, p);
     else if (p.ground || num(p.h, 16) > 60) drawGround(f, p);
     else drawFloater(f, p);
   }
@@ -673,6 +738,529 @@ function drawBreakable(f, p) {
     ctx.fillStyle = '#fff';
     ctx.beginPath();
     pill(ctx, -1, -1, w + 2, h + 2, 7);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------- Sprungwolke ----------
+
+// Koralle Platte auf einem runden Federbauch. press (0..1) drückt den Körper zusammen, von unten her,
+// damit die Platte absinkt und die Feder sichtbar nachgibt. Pfeilspitzen darüber zeigen, dass sie hochschleudert.
+function drawSpring(f, p) {
+  const { ctx } = f;
+  const w = p.w;
+  const h = num(p.h, 16);
+  const press = clamp01(num(p.press));
+  const sq = press * (f.calm ? 0.6 : 1);
+  const breath = f.calm ? 0.5 : 0.5 + 0.5 * Math.sin(f.t * 2.6 + p.id);
+  const cx = w / 2;
+  const base = h + 11; // Unterkante des Federbauchs, hier hält das Eindrücken fest
+  ctx.save();
+  ctx.translate(p.x - f.cam, p.y);
+
+  // warmer Schein, beim Abprall kräftig
+  ctx.save();
+  ctx.translate(cx, h / 2 + 3);
+  ctx.scale(w * 0.6 + 16, 26);
+  ctx.globalAlpha = clamp01(0.5 + 0.22 * breath + 0.4 * press);
+  ctx.fillStyle = G(f, 'spGlow', mkSpGlow);
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+
+  // Pfeilspitzen steigen über der Wolke auf: Form statt Farbe sagt "hoch"
+  if (!f.lodMin) {
+    ctx.strokeStyle = C.spCoil;
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let i = 0; i < 2; i++) {
+      const u = f.calm ? 0.28 + i * 0.5 : frac(f.t * 0.85 + i * 0.5 + hash(p.id) );
+      const y = -5 - u * 22;
+      ctx.globalAlpha = (f.calm ? 0.62 - i * 0.28 : Math.sin(Math.PI * u) * 0.75) * (1 - 0.5 * press);
+      ctx.beginPath();
+      ctx.moveTo(cx - 6.5, y + 5.2);
+      ctx.lineTo(cx, y);
+      ctx.lineTo(cx + 6.5, y + 5.2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Körper, von unten her zusammengedrückt
+  ctx.save();
+  ctx.translate(cx, base);
+  ctx.scale(1 + 0.15 * sq, 1 - 0.34 * sq);
+  ctx.translate(-cx, -base);
+
+  // Seitenbäuche und runder Federbauch
+  const bell = Math.min(15, Math.max(10, w * 0.15));
+  ctx.fillStyle = C.spPuff;
+  ctx.beginPath();
+  blob(ctx, w * 0.17, h + 1.5, Math.min(14, w * 0.17), 7);
+  blob(ctx, w * 0.83, h + 1.5, Math.min(14, w * 0.17), 7);
+  disc(ctx, cx, h + 1 + bell * 0.1, bell);
+  ctx.fill();
+  ctx.fillStyle = C.spPuffHi;
+  ctx.globalAlpha = 0.55;
+  ctx.beginPath();
+  blob(ctx, cx - bell * 0.35, h + 1 - bell * 0.1, bell * 0.4, bell * 0.28);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Platte
+  ctx.fillStyle = G(f, 'spBody', mkSpBody);
+  ctx.beginPath();
+  pill(ctx, 0, 0, w, h, h / 2);
+  ctx.fill();
+  ctx.strokeStyle = C.spTop;
+  ctx.lineWidth = 2.6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(h / 2, 1.4);
+  ctx.lineTo(w - h / 2, 1.4);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(166,58,44,0.55)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(h / 2, h - 1.2);
+  ctx.lineTo(w - h / 2, h - 1.2);
+  ctx.stroke();
+
+  // Feder: Zickzack auf dem Bauch, dunkel unterlegt
+  const zy = h - 1.5;
+  const zh = bell * 1.25;
+  const zw = bell * 0.55;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx, zy);
+  for (let i = 0; i < 4; i++) ctx.lineTo(cx + (i % 2 ? -zw : zw), zy + (zh * (i + 0.7)) / 4.4);
+  ctx.lineTo(cx, zy + zh);
+  ctx.strokeStyle = C.spCoilDark;
+  ctx.lineWidth = 4.6;
+  ctx.stroke();
+  ctx.strokeStyle = C.spCoil;
+  ctx.lineWidth = 2.4;
+  ctx.stroke();
+  ctx.restore();
+
+  // Abprall: Ring und kurze Strahlen über der Platte
+  if (press > 0.02) {
+    ctx.strokeStyle = C.spCoil;
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = press * 0.85;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.ellipse(cx, -1, 10 + (1 - press) * Math.min(34, w * 0.4), 4 + (1 - press) * 7, 0, 0, TAU);
+    ctx.stroke();
+    ctx.beginPath();
+    for (let i = -1; i <= 1; i++) {
+      const a = -Math.PI / 2 + i * 0.5;
+      const r0 = 9 + (1 - press) * 8;
+      ctx.moveTo(cx + Math.cos(a) * r0, -2 + Math.sin(a) * r0);
+      ctx.lineTo(cx + Math.cos(a) * (r0 + 8), -2 + Math.sin(a) * (r0 + 8));
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+// ---------- Eiswolke ----------
+
+// Kleine Eiskristalle: Raute mit Kanten, steht auf der Oberkante
+function crystal(ctx, x, y, hh, ww) {
+  ctx.moveTo(x - ww, y);
+  ctx.lineTo(x - ww * 0.35, y - hh * 0.62);
+  ctx.lineTo(x, y - hh);
+  ctx.lineTo(x + ww * 0.45, y - hh * 0.55);
+  ctx.lineTo(x + ww, y);
+  ctx.closePath();
+}
+
+// Glanzstreifen: schräge Bänder von oben nach unten im Bereich [x0, x1] einer Fläche der Höhe hh, in einem Pfad
+function glossBands(ctx, p, x0, x1, hh, cell, skew, bw) {
+  const k0 = Math.floor(x0 / cell);
+  const k1 = Math.ceil(x1 / cell);
+  let any = false;
+  for (let k = k0; k <= k1; k++) {
+    if (hash(p.id * 1.7 + k * 3.3) < 0.28) continue;
+    const bx = k * cell + hash(p.id * 0.9 + k * 1.9) * cell * 0.6;
+    const wd = bw * (0.5 + hash(p.id + k * 2.7));
+    ctx.moveTo(bx, 0);
+    ctx.lineTo(bx + wd, 0);
+    ctx.lineTo(bx + wd - skew, hh);
+    ctx.lineTo(bx - skew, hh);
+    ctx.closePath();
+    any = true;
+  }
+  return any;
+}
+
+function drawIceFloater(f, p) {
+  const { ctx } = f;
+  const w = p.w;
+  const h = num(p.h, 16);
+  const x = p.x - f.cam;
+  const c = Math.min(5, h / 2);
+  ctx.save();
+  ctx.translate(x, p.y);
+
+  // Eiszapfen unter dem Körper: Dreiecke, die nach unten zeigen
+  if (!f.lodSmall) {
+    const n = clamp(Math.round(w / 24), 2, 8);
+    ctx.fillStyle = C.iceDeep;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const hx = hash(p.id * 2.1 + i * 1.7);
+      const px = (w * (i + 0.5)) / n + (hash(p.id * 1.3 + i) - 0.5) * 5;
+      const len = 5 + hx * 12;
+      ctx.moveTo(px - 3.4, h - 5);
+      ctx.lineTo(px + (hx - 0.5) * 2, h + len);
+      ctx.lineTo(px + 3.4, h - 5);
+    }
+    ctx.fill();
+    ctx.fillStyle = C.iceTop;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const hx = hash(p.id * 2.1 + i * 1.7);
+      const px = (w * (i + 0.5)) / n + (hash(p.id * 1.3 + i) - 0.5) * 5;
+      const len = 5 + hx * 12;
+      ctx.moveTo(px - 2.2, h - 5);
+      ctx.lineTo(px + (hx - 0.5) * 2 - 0.4, h + len * 0.62);
+      ctx.lineTo(px - 0.2, h - 5);
+    }
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Platte mit abgeschrägten Ecken: kristallin statt weich
+  ctx.beginPath();
+  ctx.moveTo(c, 0);
+  ctx.lineTo(w - c, 0);
+  ctx.lineTo(w, c);
+  ctx.lineTo(w - 3, h);
+  ctx.lineTo(3, h);
+  ctx.lineTo(0, c);
+  ctx.closePath();
+  ctx.fillStyle = G(f, 'iceBody', mkIceBody);
+  ctx.fill();
+
+  ctx.save();
+  ctx.clip();
+  // Glanzstreifen und ein Lichtband, das langsam über das Eis wandert
+  ctx.fillStyle = '#ffffff';
+  ctx.globalAlpha = 0.34;
+  ctx.beginPath();
+  if (glossBands(ctx, p, 4, w - 4, h, 27, 7, 5)) ctx.fill();
+  const sweep = f.calm ? 0.34 : frac(f.t * 0.22 + hash(p.id) * 3);
+  ctx.globalAlpha = 0.5 * Math.sin(Math.PI * clamp01(sweep * 1.0));
+  ctx.beginPath();
+  const sx = -22 + sweep * (w + 44);
+  ctx.moveTo(sx, 0);
+  ctx.lineTo(sx + 11, 0);
+  ctx.lineTo(sx + 3, h);
+  ctx.lineTo(sx - 8, h);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  // Bruchlinien im Eis
+  if (!f.lodSmall) {
+    ctx.strokeStyle = C.iceFacet;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const n = clamp(Math.round(w / 40), 1, 4);
+    for (let i = 0; i < n; i++) {
+      const bx = (w * (i + 0.5)) / n + (hash(p.id * 3.1 + i) - 0.5) * 14;
+      ctx.moveTo(bx, 1);
+      ctx.lineTo(bx - 4 + hash(p.id + i * 2.2) * 8, h * 0.55);
+      ctx.lineTo(bx + 5 - hash(p.id * 1.4 + i) * 7, h);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Oberkante: weißer Glanz, darunter ein kühler Schatten
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2.6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(c + 1, 1.3);
+  ctx.lineTo(w - c - 1, 1.3);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(110,165,235,0.65)';
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(c, h - 0.5);
+  ctx.lineTo(w - c, h - 0.5);
+  ctx.stroke();
+
+  // Reifwölkchen und kleine Kristalle auf der Oberkante, Glitzer
+  if (!f.lodSmall) {
+    ctx.fillStyle = C.iceTop;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    const n = clamp(Math.round(w / 52), 1, 3);
+    for (let i = 0; i < n; i++) {
+      const cxx = (w * (i + 0.5)) / n + (hash(p.id * 4.3 + i) - 0.5) * 16;
+      crystal(ctx, cxx, 1, 5 + hash(p.id + i * 6.1) * 4, 3.4);
+    }
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    iceGlints(f, p, w, 3, -1);
+  }
+  ctx.restore();
+}
+
+// Glitzer: kleine vierzackige Sterne, jeder zu seiner Zeit. Ruhig ein schwacher Stern pro Stück.
+function iceGlints(f, p, w, count, y0) {
+  const { ctx } = f;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  let any = false;
+  for (let i = 0; i < count; i++) {
+    const gx = 8 + hash(p.id * 5.7 + i * 2.9) * Math.max(1, w - 16);
+    const gy = y0 + hash(p.id * 1.9 + i * 4.1) * 8;
+    const k = f.calm ? (i === 0 ? 0.8 : 0) : clamp01((Math.sin(f.t * 3.1 + i * 2.3 + p.id) - 0.35) * 1.6);
+    if (k < 0.05) continue;
+    sparkle(ctx, gx, gy, 2.2 + 3.4 * k);
+    any = true;
+  }
+  if (any) ctx.fill();
+}
+
+function drawIceGround(f, p) {
+  const { ctx } = f;
+  const w = p.w;
+  const x = p.x - f.cam;
+  const hh = Math.min(num(p.h, 200), f.H + 14 - p.y);
+  if (!(hh > 4)) return;
+  const a = Math.max(0, -x - 40);
+  const b = Math.min(w, f.W - x + 40);
+  ctx.save();
+  ctx.translate(x, p.y);
+
+  // Körper mit abgeschrägten oberen Ecken
+  const c = Math.min(10, w / 4);
+  ctx.beginPath();
+  ctx.moveTo(0, hh);
+  ctx.lineTo(0, c);
+  ctx.lineTo(c, 0);
+  ctx.lineTo(w - c, 0);
+  ctx.lineTo(w, c);
+  ctx.lineTo(w, hh);
+  ctx.closePath();
+  ctx.fillStyle = G(f, 'iceGround', mkIceGround);
+  ctx.fill();
+
+  ctx.save();
+  ctx.clip();
+  if (!f.lodMin) {
+    // breite, matte Glanzbänder und schmale helle Streifen, schräg wie Licht auf Eis
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 0.12;
+    ctx.beginPath();
+    if (glossBands(ctx, p, a, b, hh, 150, 150, 38)) ctx.fill();
+    ctx.globalAlpha = 0.26;
+    ctx.beginPath();
+    if (glossBands(ctx, p, a, b, hh, 150, 150, 7)) ctx.fill();
+    // Bruchlinien: Zickzack von der Oberkante nach unten
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let k = Math.floor(a / 120); k <= Math.ceil(b / 120); k++) {
+      if (hash(p.id * 2.9 + k * 1.3) < 0.3) continue;
+      const bx = k * 120 + 20 + hash(p.id * 0.7 + k) * 80;
+      ctx.moveTo(bx, 6);
+      ctx.lineTo(bx + 9, 28);
+      ctx.lineTo(bx - 3, 52 + hash(p.id + k * 3.1) * 20);
+      ctx.lineTo(bx + 6, 90 + hash(p.id * 1.1 + k) * 40);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Oberfläche: glänzende Eisfläche, darunter ein kühler Schatten
+  ctx.fillStyle = '#f9feff';
+  ctx.fillRect(0, 0, w, 5);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, 1.8);
+  ctx.globalAlpha = 0.28;
+  ctx.fillStyle = '#4f86d4';
+  ctx.fillRect(0, 5, w, 4);
+  ctx.fillRect(w - 3, 0, 3, hh);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  if (!f.lodSmall) {
+    // wandernder Lichtschein auf der Fläche und Kristalle am Rand
+    const sweep = f.calm ? 0.4 : frac(f.t * 0.12 + hash(p.id) * 3);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, -3, w, 10);
+    ctx.clip();
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 0.65 * Math.sin(Math.PI * sweep);
+    const sx = -50 + sweep * (w + 100);
+    ctx.beginPath();
+    ctx.moveTo(sx, 0);
+    ctx.lineTo(sx + 36, 0);
+    ctx.lineTo(sx + 24, 6);
+    ctx.lineTo(sx - 12, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = '#f4fcff';
+    ctx.globalAlpha = 0.92;
+    ctx.beginPath();
+    let any = false;
+    for (let k = Math.floor(a / 54); k <= Math.ceil(b / 54); k++) {
+      const lx = k * 54 + 10 + hash(p.id * 2.3 + k) * 34;
+      if (lx < 14 || lx > w - 14 || hash(p.id * 5.1 + k * 1.7) < 0.38) continue;
+      crystal(ctx, lx, 1, 6 + hash(p.id + k * 4.1) * 6, 3.6);
+      crystal(ctx, lx + 6, 1, 4 + hash(p.id * 1.3 + k * 2.1) * 3, 2.6);
+      any = true;
+    }
+    if (any) ctx.fill();
+    ctx.globalAlpha = 1;
+    // Glitzer entlang der Oberkante
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    any = false;
+    for (let k = Math.floor(a / 90); k <= Math.ceil(b / 90); k++) {
+      const gx = k * 90 + hash(p.id * 3.7 + k) * 80;
+      if (gx < 8 || gx > w - 8) continue;
+      const kk = f.calm ? 0.7 : clamp01((Math.sin(f.t * 2.8 + k * 2.1 + p.id) - 0.2) * 1.4);
+      if (kk < 0.05) continue;
+      sparkle(ctx, gx, 3 + hash(p.id + k * 8.3) * 3, 2.6 + 4 * kk);
+      any = true;
+    }
+    if (any) ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------- Blinkwolke ----------
+
+function drawBlink(f, p) {
+  const { ctx } = f;
+  const w = p.w;
+  const h = num(p.h, 16);
+  const solid = !!p.solid;
+  const warn = solid && !!p.warn;
+  const period = num(p.period) > 0 ? p.period : BLINK.PERIOD[0];
+  const on = clamp(num(p.on, BLINK.ON), 0, 1);
+  const ph = frac(num(f.s.t) / period + num(p.phase));
+  // Rest der laufenden Phase als Anteil 1..0 und, in der Vorwarnung, wie weit sie fortgeschritten ist (0..1)
+  const left = solid ? (on > 0 ? clamp01((on - ph) / on) : 0) : on < 1 ? clamp01((1 - ph) / (1 - on)) : 0;
+  const warnSpan = BLINK.WARN / period;
+  const urge = warn ? clamp01((ph - (on - warnSpan)) / warnSpan) : 0;
+  // Das Flackern der Vorwarnung kommt als alpha aus der Simulation. Ruhig bleibt es stehen.
+  const alpha = solid ? (warn && f.calm ? 0.82 : clamp01(num(p.alpha, 1))) : clamp(num(p.alpha, 0.15), 0.08, 0.3);
+  const cx = w / 2;
+  const cy = h / 2 + 0.5;
+  const x = p.x - f.cam;
+  ctx.save();
+  ctx.translate(x, p.y);
+
+  if (solid) {
+    ctx.globalAlpha = alpha;
+    // kleine Bäuche unter dem Körper
+    if (!f.lodSmall) {
+      const n = clamp(Math.round(w / 36), 2, 5);
+      ctx.fillStyle = C.blBot;
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const hx = hash(p.id * 2.9 + i * 1.7);
+        blob(ctx, (w * (i + 0.5)) / n + (hx - 0.5) * 6, h - 3 + hx * 2, (w / n) * 0.45, 5.5 + hx * 2.5);
+      }
+      ctx.fill();
+    }
+    ctx.fillStyle = G(f, 'blBody', mkBlBody);
+    ctx.beginPath();
+    pill(ctx, 0, 0, w, h, h / 2);
+    ctx.fill();
+    ctx.strokeStyle = warn ? C.blWarn : C.blEdge;
+    ctx.lineWidth = warn ? 2.2 : 1.4;
+    ctx.stroke();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(h / 2 + 1, 1.5);
+    ctx.lineTo(w - h / 2 - 1, 1.5);
+    ctx.stroke();
+  }
+
+  // Gerüst: gestrichelter Rand und Eckmarken, bei nicht fester Wolke das Einzige, was bleibt
+  const lift = solid ? 0 : clamp01((0.32 - left) / 0.32) * 0.28; // kurz vor der Rückkehr wird der Umriss deutlicher
+  const frame = solid ? (warn ? 0.95 : 0.5) : Math.min(0.55, alpha * 2.4 + lift);
+  ctx.globalAlpha = frame * (solid ? alpha : 1);
+  ctx.strokeStyle = warn ? C.blWarn : solid ? C.blEdge : '#c9fbe8';
+  ctx.lineWidth = solid ? 1.2 : 1.8;
+  ctx.lineCap = 'butt';
+  if (!solid) {
+    dash(ctx, [5, 4]);
+    ctx.beginPath();
+    pill(ctx, 0.5, 0.5, w - 1, h - 1, h / 2 - 0.5);
+    ctx.stroke();
+    dash(ctx, []);
+    // feste Linie oben: hier wird sie stehen
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(h / 2, 1.3);
+    ctx.lineTo(w - h / 2, 1.3);
+    ctx.stroke();
+  }
+  // Eckmarken
+  ctx.lineWidth = solid ? 1.6 : 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (let side = 0; side < 2; side++) {
+    const ex = side ? w + 3.5 : -3.5;
+    const d = side ? -1 : 1;
+    ctx.moveTo(ex + d * 5, -3.5);
+    ctx.lineTo(ex, -3.5);
+    ctx.lineTo(ex, h + 3.5);
+    ctx.lineTo(ex + d * 5, h + 3.5);
+  }
+  ctx.stroke();
+
+  // Takt Ring in der Mitte
+  const r = 4.8 * (warn && !f.calm ? 1 + 0.16 * Math.sin(TAU * (3 * urge + 3 * urge * urge)) : 1);
+  ctx.globalAlpha = solid ? alpha : Math.min(0.6, frame + 0.1);
+  ctx.lineCap = 'round';
+  const track = solid ? 'rgba(35,133,124,0.3)' : 'rgba(201,251,232,0.4)';
+  const arc = warn ? C.blWarnDark : solid ? C.blEdge : '#e9fff6';
+  ctx.strokeStyle = track;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.stroke();
+  if (left > 0.01) {
+    ctx.strokeStyle = arc;
+    ctx.lineWidth = 2.6;
+    if (warn) dash(ctx, [3, 2.4]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + TAU * Math.min(left, 0.999));
+    ctx.stroke();
+    if (warn) dash(ctx, []);
+  }
+  // Takt Punkte links und rechts des Rings
+  if (!f.lodMin && w > 60) {
+    ctx.fillStyle = solid ? C.blEdge : '#c9fbe8';
+    ctx.globalAlpha *= 0.8;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const off = 11 + i * 7;
+      if (cx - off < 8) break;
+      disc(ctx, cx - off, cy, 1.5 - i * 0.2);
+      disc(ctx, cx + off, cy, 1.5 - i * 0.2);
+    }
     ctx.fill();
   }
   ctx.restore();
@@ -1267,6 +1855,537 @@ function drawThunderCloud(f, h, charge, strike, cool, flick) {
 }
 
 // ============================================================
+// Kometen
+// ============================================================
+
+// Phasen (obstacles.js): idle, warn (charge 0..1), strike (progress 0..1), cooldown (timer zählt herunter).
+// Schaden gibt es im Kreis COMET.RADIUS um den Einschlagpunkt (x, y), also zeichnet die Vorwarnung genau diesen Kreis:
+// flacher Ring am Boden, Kuppel darüber, Fadenkreuz. Ohne Farbe und ohne Bewegung lesbar: der Bogen auf der Kuppel
+// füllt sich mit charge, die Marken laufen zusammen, das Pulsieren (nur ohne reduceMotion) wird mit charge schneller.
+
+function drawComets(f) {
+  const list = f.s.hazards || [];
+  for (let i = 0; i < list.length; i++) {
+    const h = list[i];
+    if (!cometOk(h)) continue;
+    const e = cometSpan(h);
+    if (visX(f, e[0], e[1])) drawComet(f, h);
+  }
+}
+
+function drawComet(f, h) {
+  const { ctx } = f;
+  const x = h.x - f.cam;
+  ctx.save();
+  if (h.phase === 'warn') cometWarn(f, h, x, h.y);
+  else if (h.phase === 'strike') cometStrike(f, h, x, h.y);
+  else if (h.phase === 'cooldown') cometEmbers(f, h, x, h.y);
+  else if (!f.lodMin) cometIdle(f, x, h.y);
+  ctx.restore();
+}
+
+// Ruhezustand: nur eine schwache Markierung, wo er einschlagen kann
+function cometIdle(f, x, y) {
+  const { ctx } = f;
+  const R = COMET.RADIUS;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = C.cmRing;
+  ctx.globalAlpha = 0.26;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  dash(ctx, [3, 6]);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, R * 0.9, 4.5, 0, 0, TAU);
+  ctx.stroke();
+  dash(ctx, []);
+  ctx.beginPath();
+  ctx.moveTo(-6, -1);
+  ctx.lineTo(6, -1);
+  ctx.moveTo(0, -7);
+  ctx.lineTo(0, 5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Der Teil der Flugbahn, der schon im Bild liegt: von der Oberkante schräg zum Einschlagpunkt.
+// Liefert Richtung (ux, uy, nach unten) und die Strecke t0 vom Einschlag zurück bis zur Bildoberkante.
+function cometRoute(h, out) {
+  const a = cometStart(h);
+  const dx = h.x - a.x;
+  const dy = h.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  out.ux = dx / len;
+  out.uy = dy / len;
+  out.t0 = out.uy > 0.05 ? h.y / out.uy : 0;
+  return out;
+}
+
+// Einheitsform Schweif: Kopf bei (0, 0), Spitze bei (0, minus 1), mit dem Verlauf mkCmTail
+function tailShape(ctx) {
+  ctx.moveTo(-1, 0);
+  ctx.quadraticCurveTo(-0.6, -0.5, 0, -1);
+  ctx.quadraticCurveTo(0.6, -0.5, 1, 0);
+  ctx.closePath();
+}
+
+// Schweif von (px, py) in Richtung (dirx, diry) mit Breite wd und Länge len
+function drawTail(f, px, py, dirx, diry, wd, len, alpha) {
+  const { ctx } = f;
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(Math.atan2(dirx, -diry));
+  ctx.scale(wd, len);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = G(f, 'cmTail', mkCmTail);
+  ctx.beginPath();
+  tailShape(ctx);
+  ctx.fill();
+  ctx.restore();
+}
+
+// Ring, Kuppel und Fadenkreuz der Zielmarke als Pfade (ohne Zeichnen), Mittelpunkt im Ursprung
+function targetRings(ctx, rr) {
+  ctx.moveTo(rr * 1.06, 0);
+  ctx.ellipse(0, 0, rr * 1.06, 7, 0, 0, TAU);
+  ctx.moveTo(-rr, 0);
+  ctx.arc(0, 0, rr, Math.PI, TAU);
+}
+
+function targetCross(ctx, R) {
+  ctx.moveTo(-R - 17, -1);
+  ctx.lineTo(-10, -1);
+  ctx.moveTo(10, -1);
+  ctx.lineTo(R + 17, -1);
+  ctx.moveTo(0, -R - 19);
+  ctx.lineTo(0, -11);
+  ctx.moveTo(0, 3);
+  ctx.lineTo(0, 6);
+}
+
+function cometWarn(f, h, x, y) {
+  const { ctx } = f;
+  const R = COMET.RADIUS;
+  const c = clamp01(num(h.charge));
+  // Pulsieren wird mit der Aufladung schneller (Phase aus charge statt Zeit, damit nichts springt)
+  const pulse = f.calm ? 0 : Math.sin(TAU * (1.5 * c + 3 * c * c));
+  const lit = f.calm ? 1 : 0.8 + 0.2 * pulse;
+  const rr = R * (1 + (0.03 + 0.07 * c) * pulse);
+
+  cometSky(f, h, c);
+
+  ctx.save();
+  ctx.translate(x, y);
+  // Schein: Kuppel und flacher Schein am Boden
+  ctx.save();
+  ctx.scale(R * 1.5, R * 1.05);
+  ctx.globalAlpha = (0.3 + 0.5 * c) * lit;
+  ctx.fillStyle = G(f, 'cmGlow', mkCmGlow);
+  ctx.fillRect(-1, -1, 2, 1);
+  ctx.restore();
+  ctx.save();
+  ctx.scale(R * 1.3, 9);
+  ctx.globalAlpha = (0.5 + 0.4 * c) * lit;
+  ctx.fillStyle = G(f, 'cmGlow', mkCmGlow);
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const wob = f.calm ? 0 : f.time * 34;
+  // dunkle Unterlage, damit die Marke auch auf hellem Grund lesbar bleibt, dann die helle Linie
+  for (let pass = 0; pass < 2; pass++) {
+    const dark = pass === 0;
+    ctx.strokeStyle = dark ? C.cmDark : C.cmRing;
+    ctx.globalAlpha = dark ? 0.8 : (0.7 + 0.3 * c) * lit;
+    ctx.lineWidth = dark ? 5 : 2;
+    dash(ctx, [9, 6], wob);
+    ctx.beginPath();
+    targetRings(ctx, rr);
+    ctx.stroke();
+    dash(ctx, []);
+    ctx.lineWidth = dark ? 5 : 2.2;
+    ctx.beginPath();
+    targetCross(ctx, R);
+    ctx.stroke();
+    // Füllstand: der Bogen auf der Kuppel wächst von links nach rechts mit charge
+    if (c > 0.01) {
+      ctx.strokeStyle = dark ? C.cmDark : '#fff6dc';
+      ctx.lineWidth = dark ? 8.5 : 4.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, rr, Math.PI, Math.PI + Math.PI * c);
+      ctx.stroke();
+    }
+  }
+  if (c > 0.01) {
+    ctx.globalAlpha = 0.5 * lit;
+    ctx.strokeStyle = C.cmMid;
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(0, 0, rr, Math.PI, Math.PI + Math.PI * c);
+    ctx.stroke();
+  }
+
+  // Marken laufen auf die Mitte zu und stehen am Ende dicht am Ring
+  const d = R + 7 + (1 - c) * 26;
+  ctx.fillStyle = C.cmRing;
+  ctx.strokeStyle = C.cmDark;
+  ctx.lineWidth = 1.6;
+  ctx.globalAlpha = (0.75 + 0.25 * c) * lit;
+  ctx.beginPath();
+  for (let side = -1; side <= 1; side += 2) {
+    const tx = side * d * 0.7;
+    const ty = -d * 0.7;
+    ctx.moveTo(tx + side * 4, ty - 6.5);
+    ctx.lineTo(tx - side * 6.5, ty + 1);
+    ctx.lineTo(tx + side * 4, ty + 4.5);
+    ctx.closePath();
+  }
+  ctx.stroke();
+  ctx.fill();
+
+  // Pfeilspitzen auf der senkrechten Linie: hier fällt etwas herab
+  if (!f.lodMin) {
+    ctx.strokeStyle = C.cmCore;
+    ctx.lineWidth = 2.4;
+    for (let i = 0; i < 2; i++) {
+      const u = f.calm ? 0.25 + i * 0.5 : frac(f.time * (1.2 + 1.6 * c) + i * 0.5);
+      const cy = -R - 36 + u * 20;
+      ctx.globalAlpha = (f.calm ? 0.85 - i * 0.35 : Math.sin(Math.PI * u)) * lit;
+      ctx.beginPath();
+      ctx.moveTo(-6.5, cy - 5.5);
+      ctx.lineTo(0, cy);
+      ctx.lineTo(6.5, cy - 5.5);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// Vorwarnung am Himmel: eine gestrichelte Führungslinie von der Bildoberkante zum Ziel und ein schwach leuchtender
+// Schweif Ansatz, der mit der Aufladung stärker wird
+function cometSky(f, h, c) {
+  const { ctx } = f;
+  const r = cometRoute(h, { ux: 0, uy: 1, t0: 0 });
+  if (!(r.t0 > 20)) return;
+  const ex = h.x - r.ux * r.t0 - f.cam;
+  if (ex < -90 || ex > f.W + 90) return;
+  const reach = Math.min(r.t0 - 30, 170 + 150 * c);
+  ctx.save();
+  ctx.lineCap = 'round';
+  // Führungslinie
+  ctx.strokeStyle = C.cmRing;
+  ctx.globalAlpha = 0.14 + 0.2 * c;
+  ctx.lineWidth = 1.4;
+  dash(ctx, [2, 9], f.calm ? 0 : -f.time * 26);
+  ctx.beginPath();
+  ctx.moveTo(ex, 0);
+  ctx.lineTo(ex + r.ux * reach, r.uy * reach);
+  ctx.stroke();
+  dash(ctx, []);
+  // Schweif Ansatz: glimmender Streifen mit heller Spitze am Bildrand
+  drawTail(f, ex, 0, r.ux, r.uy, 2 + 4 * c, 24 + 70 * c, 0.3 + 0.45 * c);
+  ctx.translate(ex, 2);
+  ctx.scale(13 + 14 * c, 13 + 14 * c);
+  ctx.globalAlpha = 0.28 + 0.5 * c;
+  ctx.fillStyle = G(f, 'cmHalo', mkCmHalo);
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+}
+
+function cometStrike(f, h, x, y) {
+  const { ctx } = f;
+  const R = COMET.RADIUS;
+  const k = clamp01(num(h.progress));
+  const ik = smooth((k - 0.55) / 0.45); // Einschlag Blitz in den letzten 45 Prozent des Flugs
+
+  // Gefahrenzone: leuchtet in der ganzen Phase, dort ist Schaden
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.save();
+  ctx.scale(R * 1.5, R * 1.05);
+  ctx.globalAlpha = 0.6 + 0.4 * ik;
+  ctx.fillStyle = G(f, 'cmGlow', mkCmGlow);
+  ctx.fillRect(-1, -1, 2, 1);
+  ctx.restore();
+  ctx.fillStyle = 'rgba(255,150,80,0.2)';
+  ctx.beginPath();
+  ctx.arc(0, 0, R, Math.PI, TAU);
+  ctx.closePath();
+  ctx.fill();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = C.cmDark;
+  ctx.globalAlpha = 0.8;
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  targetRings(ctx, R);
+  ctx.stroke();
+  ctx.strokeStyle = '#fff3d2';
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.restore();
+
+  // Komet mit Schweif entlang der Bahn
+  const pos = cometPosition(h);
+  const hx = pos.x - f.cam;
+  const hy = pos.y;
+  if (hy > -70 && hx > -120 && hx < f.W + 120) {
+    const r = cometRoute(h, { ux: 0, uy: 1, t0: 0 });
+    cometBody(f, h, hx, hy, r.ux, r.uy);
+  }
+
+  // Einschlag: heller Fleck, Druckring und Funkenfächer
+  if (ik > 0.01) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.save();
+    ctx.scale(R * (1.1 + 0.9 * ik), R * (0.7 + 0.7 * ik));
+    ctx.globalAlpha = ik;
+    ctx.fillStyle = G(f, 'cmFlash', mkCmFlash);
+    ctx.fillRect(-1, -1, 2, 2);
+    ctx.restore();
+    ctx.strokeStyle = '#fffbe9';
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.9 * ik;
+    ctx.lineWidth = 3.2 - 1.4 * ik;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, R * (0.45 + 1.2 * ik), 5 + 8 * ik, 0, 0, TAU);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const n = f.lodSmall ? 5 : 9;
+    const seed = h.id * 7.1 + (f.calm ? 0 : Math.floor(f.time * 24));
+    for (let j = 0; j < n; j++) {
+      const a = -Math.PI * (0.06 + 0.88 * (j / (n - 1)));
+      const r0 = R * 0.35 + 6;
+      const r1 = r0 + (16 + 30 * hash(seed + j * 2.3)) * (0.4 + 0.6 * ik);
+      ctx.moveTo(Math.cos(a) * r0 * 1.2, Math.sin(a) * r0);
+      ctx.lineTo(Math.cos(a) * r1 * 1.2, Math.sin(a) * r1);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// Kopf und Schweif des fliegenden Kometen. (ux, uy) ist die Flugrichtung (nach unten).
+function cometBody(f, h, hx, hy, ux, uy) {
+  const { ctx } = f;
+  const bx = -ux; // der Schweif zeigt entgegen der Flugrichtung
+  const by = -uy;
+  drawTail(f, hx, hy, bx, by, 19, 230, 0.5);
+  drawTail(f, hx, hy, bx, by, 10, 165, 0.85);
+  drawTail(f, hx, hy, bx, by, 3.6, 110, 1);
+
+  // Funken, die sich vom Schweif lösen
+  if (!f.lodSmall) {
+    const seed = h.id * 3.7 + (f.calm ? 0 : Math.floor(f.time * 26));
+    ctx.fillStyle = '#ffe9bd';
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const dd = 26 + i * 22 + hash(seed + i) * 14;
+      const side = (hash(seed * 1.3 + i * 4.1) - 0.5) * (14 + dd * 0.18);
+      disc(ctx, hx + bx * dd - by * side, hy + by * dd + bx * side, 1 + 1.6 * hash(seed + i * 9.7));
+    }
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.save();
+  ctx.translate(hx, hy);
+  ctx.save();
+  ctx.scale(44, 44);
+  ctx.fillStyle = G(f, 'cmHalo', mkCmHalo);
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+  ctx.rotate(Math.atan2(uy, ux));
+  ctx.fillStyle = C.cmMid;
+  ctx.beginPath();
+  blob(ctx, 0, 0, 12.5, 10);
+  ctx.fill();
+  ctx.fillStyle = C.cmHot;
+  ctx.beginPath();
+  blob(ctx, 2.5, 0, 9.5, 7.6);
+  ctx.fill();
+  ctx.fillStyle = C.cmCore;
+  ctx.beginPath();
+  disc(ctx, 4, 0, 5);
+  ctx.fill();
+  ctx.restore();
+}
+
+// Nach dem Einschlag: dunkler Brandfleck, Glut, aufsteigende Funken und Rauch, alles verklingt mit timer
+function cometEmbers(f, h, x, y) {
+  const { ctx } = f;
+  const R = COMET.RADIUS;
+  const k = clamp01(num(h.timer) / Math.max(0.1, COMET.COOLDOWN));
+  const hot = Math.pow(k, 0.8);
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Brandfleck auf dem Boden
+  ctx.fillStyle = C.cmDark;
+  ctx.globalAlpha = 0.45 + 0.3 * k;
+  ctx.beginPath();
+  blob(ctx, 0, 1.2, R * 0.95, 4.6);
+  blob(ctx, -R * 0.55, 1, R * 0.32, 3);
+  blob(ctx, R * 0.6, 1, R * 0.3, 3);
+  ctx.fill();
+
+  // Glut
+  ctx.save();
+  ctx.scale(R * 1.05, 12);
+  ctx.globalAlpha = hot;
+  ctx.fillStyle = G(f, 'cmEmber', mkCmEmber);
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+  ctx.save();
+  ctx.scale(R * 0.8, R * 0.5);
+  ctx.globalAlpha = hot * 0.6;
+  ctx.fillRect(-1, -1, 2, 1);
+  ctx.restore();
+
+  // Glutpunkte: flackern, ruhig bleiben sie stehen
+  ctx.fillStyle = '#ffd28a';
+  ctx.beginPath();
+  for (let i = 0; i < (f.lodSmall ? 3 : 7); i++) {
+    const ex = (hash(h.id * 2.1 + i * 3.3) - 0.5) * R * 1.7;
+    const fl = f.calm ? 0.8 : 0.45 + 0.55 * Math.sin(f.t * 8 + i * 2.3 + h.id);
+    ctx.moveTo(ex + 2.4, -0.4);
+    ctx.arc(ex, -0.4, 1.4 + 1.2 * clamp01(fl), 0, TAU);
+  }
+  ctx.globalAlpha = hot;
+  ctx.fill();
+
+  if (!f.lodSmall) {
+    // Funken steigen auf
+    ctx.strokeStyle = '#ffbd6a';
+    ctx.lineWidth = 1.7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const u = f.calm ? 0.15 + 0.5 * hash(h.id + i * 1.9) : frac(f.t * (0.5 + 0.4 * hash(i * 2.7 + h.id)) + hash(i * 4.9 + h.id));
+      const sx = (hash(h.id * 0.7 + i * 6.1) - 0.5) * R * 1.4 + Math.sin(u * 6 + i) * 4 * (f.calm ? 0 : 1);
+      const sy = -4 - u * 54;
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx, sy + 3.5);
+    }
+    ctx.globalAlpha = hot * 0.9;
+    ctx.stroke();
+    // Rauch
+    ctx.fillStyle = G(f, 'steam', mkSteam);
+    for (let i = 0; i < 3; i++) {
+      const u = f.calm ? 0.3 + i * 0.25 : frac(f.t * 0.22 + i * 0.34 + hash(h.id));
+      ctx.save();
+      ctx.translate((i - 1) * 14 + Math.sin(f.t * 1.3 + i) * 3 * (f.calm ? 0 : 1), -14 - u * 40);
+      ctx.scale(10 + u * 9, 8 + u * 7);
+      ctx.globalAlpha = 0.34 * k * Math.sin(Math.PI * u);
+      ctx.fillRect(-1, -1, 2, 2);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+}
+
+// ============================================================
+// Hagel
+// ============================================================
+
+// Hagelkörner: helle Eiskugeln mit Glanz und kurzem Schweif gegen die Flugrichtung. Alle Körner laufen
+// in denselben Pfaden (Schweif, Hof, Körper, Glanz), die Aufrufe wachsen kaum mit der Anzahl.
+function drawHails(f) {
+  const list = f.s.hazards || [];
+  let vis = null;
+  for (let i = 0; i < list.length; i++) {
+    const h = list[i];
+    if (!h || h.kind !== 'hail' || !Number.isFinite(h.x) || !Number.isFinite(h.y)) continue;
+    if (!visX(f, h.x - 45, h.x + 45) || h.y < -60 || h.y > f.H + 60) continue;
+    (vis || (vis = [])).push(h);
+  }
+  if (!vis) return;
+  const { ctx } = f;
+  const R = HAIL.R;
+  const cam = f.cam;
+  ctx.save();
+
+  if (!f.lodMin) {
+    // Schweif: breiter weicher Keil und ein schmaler heller Kern
+    for (let pass = 0; pass < 2; pass++) {
+      ctx.fillStyle = `${C.hailTail}${pass ? 0.62 : 0.26})`;
+      ctx.beginPath();
+      for (const h of vis) {
+        const vx = num(h.vx);
+        const vy = num(h.vy);
+        const sp = Math.hypot(vx, vy);
+        if (sp < 5) continue;
+        const ux = vx / sp;
+        const uy = vy / sp;
+        const len = clamp(sp * 0.12, 14, 42) * (pass ? 0.8 : 1.35);
+        const wd = R * (pass ? 0.42 : 0.95);
+        const x = h.x - cam;
+        ctx.moveTo(x - uy * wd, h.y + ux * wd);
+        ctx.lineTo(x - ux * len, h.y - uy * len);
+        ctx.lineTo(x + uy * wd, h.y - ux * wd);
+        ctx.closePath();
+      }
+      ctx.fill();
+    }
+    // Hof
+    ctx.fillStyle = 'rgba(190,226,255,0.22)';
+    ctx.beginPath();
+    for (const h of vis) disc(ctx, h.x - cam, h.y, R + 4.5);
+    ctx.fill();
+  }
+
+  // Körper
+  ctx.fillStyle = '#cfe5fb';
+  ctx.strokeStyle = C.hailEdge;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (const h of vis) disc(ctx, h.x - cam, h.y, R);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#f7fcff';
+  ctx.beginPath();
+  for (const h of vis) disc(ctx, h.x - cam - R * 0.2, h.y - R * 0.22, R * 0.66);
+  ctx.fill();
+  if (!f.lodSmall) {
+    // Kanten im Eis, sie drehen sich mit dem Korn
+    ctx.strokeStyle = 'rgba(120,165,228,0.65)';
+    ctx.lineWidth = 1;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (const h of vis) {
+      const a = f.calm ? h.id : num(h.anim) * 4 + h.id;
+      const x = h.x - cam;
+      ctx.moveTo(x + Math.cos(a) * R * 0.15, h.y + Math.sin(a) * R * 0.15);
+      ctx.lineTo(x + Math.cos(a + 0.5) * R * 0.88, h.y + Math.sin(a + 0.5) * R * 0.88);
+      ctx.moveTo(x + Math.cos(a) * R * 0.15, h.y + Math.sin(a) * R * 0.15);
+      ctx.lineTo(x + Math.cos(a - 1.9) * R * 0.8, h.y + Math.sin(a - 1.9) * R * 0.8);
+    }
+    ctx.stroke();
+  }
+  // Glanz
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  for (const h of vis) disc(ctx, h.x - cam - R * 0.36, h.y - R * 0.4, R * 0.22);
+  ctx.fill();
+  if (!f.lodSmall) {
+    ctx.beginPath();
+    let any = false;
+    for (const h of vis) {
+      const k = f.calm ? 0.7 : clamp01((Math.sin(f.t * 6 + h.id * 2.1) - 0.2) * 1.5);
+      if (k < 0.05) continue;
+      sparkle(ctx, h.x - cam + R * 0.55, h.y - R * 0.7, 2 + 4 * k);
+      any = true;
+    }
+    if (any) ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ============================================================
 // Sterne
 // ============================================================
 
@@ -1461,6 +2580,7 @@ function drawPowerup(f, u) {
   else if (u.type === 'dash') rainbowSymbol(ctx);
   else if (u.type === 'magnet') magnetSymbol(ctx);
   else if (u.type === 'feather') featherSymbol(ctx);
+  else if (u.type === 'double') doubleSymbol(ctx);
   ctx.restore();
 }
 
@@ -1559,6 +2679,34 @@ function featherSymbol(ctx) {
   ctx.moveTo(0, 0.2);
   ctx.lineTo(6.6, -0.4);
   ctx.stroke();
+}
+
+// Doppelpunkte: großes "x2" aus Strichen und ein kleiner Stern, damit es auch ohne die orange Farbe lesbar bleibt
+function doubleSymbol(ctx) {
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (let pass = 0; pass < 2; pass++) {
+    ctx.strokeStyle = pass ? '#fff6e0' : '#c25a0c';
+    ctx.lineWidth = pass ? 2.2 : 4.2;
+    ctx.beginPath();
+    // x
+    ctx.moveTo(-10.5, -2.6);
+    ctx.lineTo(-4.6, 3.8);
+    ctx.moveTo(-4.6, -2.6);
+    ctx.lineTo(-10.5, 3.8);
+    // 2
+    ctx.moveTo(-1.2, -3.4);
+    ctx.quadraticCurveTo(-1.2, -7.2, 2.9, -7.2);
+    ctx.quadraticCurveTo(7.2, -7.2, 7.2, -3.4);
+    ctx.quadraticCurveTo(7.2, -0.6, 3.4, 2.2);
+    ctx.lineTo(-1.4, 6.2);
+    ctx.lineTo(7.6, 6.2);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#fffbe6';
+  ctx.beginPath();
+  sparkle(ctx, 9.4, -9.2, 3.8);
+  ctx.fill();
 }
 
 // ============================================================

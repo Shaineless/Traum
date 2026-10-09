@@ -71,10 +71,38 @@ test('startEvent legt das Ereignis an, zählt mit und zeigt das Banner', () => {
 
 test('unbekannte Typen werden ignoriert', () => {
   const s = world();
-  for (const bad of ['nope', 'constructor', '', undefined, null, 3]) assert.equal(startEvent(s, bad), false);
+  for (const bad of ['nope', 'constructor', '', undefined, null, 3, 'FIRST_METER', 'EVERY', 'CHANCE']) assert.equal(startEvent(s, bad), false);
   assert.equal(s.events.active, null);
   assert.equal(s.events.count, 0);
   assert.equal(s.banner, null);
+  assert.equal(s.sfx.length, 0, 'ohne Start auch kein Ton');
+});
+
+test('der Start eines Ereignisses spielt den Ton event, genau einmal', () => {
+  for (const type of TYPES) {
+    const s = world();
+    startEvent(s, type);
+    assert.deepEqual(s.sfx.map((e) => e.n), ['event'], type);
+    runFor(s, 3);
+    assert.equal(s.sfx.filter((e) => e.n === 'event').length, 1, 'danach bleibt es still');
+  }
+});
+
+test('ein geplanter Start spielt den Ton event, ein misslungener Wurf nicht', () => {
+  let started = 0;
+  let silent = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const s = world({ seed, m: 700 });
+    tick(s);
+    if (s.events.active) {
+      started++;
+      assert.deepEqual(s.sfx.map((e) => e.n), ['event'], `Seed ${seed}`);
+    } else {
+      silent++;
+      assert.equal(s.sfx.length, 0, `Seed ${seed}`);
+    }
+  }
+  assert.ok(started > 10 && silent > 3, `${started} Starts, ${silent} ohne`);
 });
 
 test('Flags: Supermond setzt starBoost, Traumsturm setzt enemyBoost, sonst keines', () => {
@@ -746,4 +774,149 @@ test('im Spiel: jedes Ereignis läuft durch den echten Simulationsschritt, Invar
       assert.deepEqual(invariants(s), [], `${type} Seed ${seed}`);
     }
   }
+});
+
+// ---------- Neue Einträge in EVENTS ----------
+
+test('neue Einträge in EVENTS (Zahlen, leere oder fremde Ereignisse) ändern nichts am Ablauf', () => {
+  const seeds = [3, 8, 14];
+  const base = seeds.map((seed) => longRun(seed, { maxMeter: 4000 }));
+  EVENTS.zukunft = { name: 'Zukunft', dur: 5 };
+  EVENTS.NOCHMAL = 12;
+  EVENTS.leer = {};
+  try {
+    const extra = seeds.map((seed) => longRun(seed, { maxMeter: 4000 }));
+    assert.deepEqual(extra, base, 'gleicher Zufall, gleiche Ereignisse');
+    for (const type of ['zukunft', 'NOCHMAL', 'leer', 'FIRST_METER', 'EVERY', 'CHANCE']) {
+      const s = world();
+      assert.equal(startEvent(s, type), false, type);
+      assert.equal(s.events.active, null);
+      assert.equal(s.sfx.length, 0);
+    }
+    const seen = new Set();
+    for (const run of extra) for (const e of run.log) seen.add(e.type);
+    for (const type of seen) assert.ok(TYPES.includes(type), type);
+  } finally {
+    delete EVENTS.zukunft;
+    delete EVENTS.NOCHMAL;
+    delete EVENTS.leer;
+  }
+});
+
+test('ein kaputter oder fehlender Eintrag in EVENTS wirft keinen Fehler', () => {
+  const saved = EVENTS.storm;
+  try {
+    EVENTS.storm = { name: 'Traumsturm' }; // ohne dur
+    const s = world({ m: 1000 });
+    assert.equal(startEvent(s, 'storm'), false);
+    assert.equal(s.events.active, null);
+    for (let seed = 1; seed <= 40; seed++) {
+      const w = world({ seed, m: 1000 });
+      assert.doesNotThrow(() => tick(w, 3));
+      assert.notEqual(w.events.active && w.events.active.type, 'storm');
+    }
+    // ein schon laufendes Ereignis, dessen Eintrag verschwindet, wird sauber beendet
+    EVENTS.storm = saved;
+    const run = world();
+    startEvent(run, 'storm');
+    tick(run, 10);
+    delete EVENTS.storm;
+    assert.doesNotThrow(() => tick(run, 2));
+    assert.equal(run.events.active, null);
+    assert.equal(run.events.enemyBoost, false);
+    assert.equal(eventWindVx(run), 0);
+  } finally {
+    EVENTS.storm = saved;
+  }
+});
+
+// ---------- Fuzz ----------
+
+// Kleiner eigener Zufall nur für die Tests (mulberry32), die Spiellogik bleibt unberührt
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let x = a;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function fuzzEvents(seed, steps = 2400) {
+  const r = prng(seed);
+  const rr = (a, b) => a + r() * (b - a);
+  const s = world({ seed, m: 380 });
+  s.player.y = 300;
+  const dts = [STEP, STEP, STEP, STEP, 1 / 30, 0.1, 0.5];
+  const kinds = [...TYPES, 'nope', null];
+  let sfxEvents = 0;
+  let startedManually = 0;
+  for (let i = 0; i < steps; i++) {
+    // Der Spieler läuft, die Kamera folgt, vor dem Bild liegen Plattformen für den Sternschauer
+    if (r() < 0.85) s.player.x += rr(0, 8);
+    s.camX = s.player.x - 300;
+    if (s.player.x > s.run.maxX) s.run.maxX = s.player.x;
+    if (i % 30 === 0) {
+      s.platforms.push(createStaticPlatform(s, s.camX + W + rr(0, 500), rr(250, 380), rr(120, 300)));
+      while (s.platforms.length > 24) s.platforms.shift();
+    }
+    if (r() < 0.02) s.player.dead = !s.player.dead;
+    s.sfx.length = 0;
+    const countBefore = s.events.count;
+    if (r() < 0.01) {
+      if (startEvent(s, kinds[Math.floor(r() * kinds.length)])) startedManually++;
+    }
+    const dt = r() < 0.03 ? [0, -1, NaN][Math.floor(r() * 3)] : dts[Math.floor(r() * dts.length)];
+    const valid = dt > 0;
+    const frozen = valid ? null : structuredClone(s);
+    if (valid) s.t += dt;
+    updateEvents(s, dt);
+    if (!valid) assert.deepEqual(s, frozen, 'ungültige Zeit verändert nichts');
+    if (r() < 0.8) updateCollectibles(s, STEP);
+    sfxEvents += s.sfx.filter((e) => e.n === 'event').length;
+
+    const ev = s.events;
+    const a = ev.active;
+    assert.ok(ev.count - countBefore >= 0 && ev.count - countBefore <= 1, `Schritt ${i}`);
+    assert.equal(ev.starBoost, !!a && a.type === 'supermoon');
+    assert.equal(ev.enemyBoost, !!a && a.type === 'storm');
+    const wind = eventWindVx(s);
+    assert.ok(Number.isFinite(wind) && Math.abs(wind) <= 70);
+    if (!a || a.type !== 'storm') assert.equal(wind, 0);
+    if (a) {
+      assert.ok(TYPES.includes(a.type));
+      assert.ok(a.t >= 0 && a.t <= a.dur, `t ${a.t} von ${a.dur}`);
+      assert.ok(Object.values(a.data).every(Number.isFinite));
+      const env = eventEnvelope(s);
+      assert.ok(env.env >= 0 && env.env <= 1);
+    } else {
+      assert.equal(eventEnvelope(s), null);
+    }
+    const stars = eventStars(s);
+    assert.ok(stars.length <= 14, `${stars.length} Ereignissterne`);
+    for (const st of stars) assert.ok(st.value === SCORE.EVENT_STAR);
+    assert.ok(s.stars.length <= LIMITS.MAX_STARS);
+    assert.ok(s.sfx.length <= LIMITS.MAX_SFX);
+    if (i % 200 === 0) assert.deepEqual(invariants(s), []);
+  }
+  assert.equal(sfxEvents, s.events.count, 'jeder Start spielt genau einen Ton');
+  assert.ok(s.events.count >= startedManually);
+  assert.deepEqual(invariants(s), []);
+  return s;
+}
+
+test('Fuzz: zufällige Starts, Zeiten und Spielerwege halten alle Regeln ein', () => {
+  let events = 0;
+  for (let seed = 1; seed <= 24; seed++) events += fuzzEvents(seed).events.count;
+  assert.ok(events > 150, `nur ${events} Ereignisse in 24 Läufen`);
+});
+
+test('Fuzz: gleicher Zufall gibt gleichen Endzustand', () => {
+  const a = fuzzEvents(5);
+  const b = fuzzEvents(5);
+  assert.deepEqual(a.events, b.events);
+  assert.deepEqual(a.stars, b.stars);
+  assert.equal(a.rng, b.rng);
 });

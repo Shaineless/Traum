@@ -2,6 +2,8 @@
 // Die Welt entsteht ohne Spieler (Kamera wird künstlich vorangetrieben). Geprüft wird mit s.gen.keepLog und
 // routeLog, mit den physischen Grenzen aus game/reach.js, mit einer eigenen Flugbahn Rechnung aus PHYS und
 // mit der echten Spielerphysik (stepSim).
+// Die Test Chunks reichen bis Schwierigkeit 9,4 und zeigen alle Plattformarten (Sprung, Eis, Blink, bewegt, brüchig).
+// Verbindungen zwischen Chunks müssen mit einem normalen Sprung ohne Gleiten und ohne Wolkenstoß gelingen.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { H, KILL_Y, METER, PHYS, START_X, STEP } from '../game/constants.js';
@@ -12,12 +14,13 @@ import { createStaticPlatform } from '../game/entities.js';
 import { stepSim } from '../game/sim.js';
 import { safeFor } from '../game/validate.js';
 import { CHUNKS } from '../game/chunks/index.js';
+import { TEST_LIB_HIGH } from './gen-lib.mjs';
 
 // ---------- Test Chunks (eigene kleine Bibliothek mit allen Plattformarten) ----------
 
 const hop = (b, y1, y2, k = 0.8, o = {}) => Math.max(60, Math.floor(maxGap(y1, y2, { safe: safeFor(b.diff) * k, ...o })));
 
-const TEST_LIB = [
+const BASE_LIB = [
   {
     id: 'r-meadow', name: 'Wiese', diff: 1, weight: 3, min: 0, max: Infinity, mech: [], rest: true,
     build(b) { const g = b.ground(0, 0, b.int(520, 680)); b.starsOver(g, 6, 55); b.route(g); },
@@ -147,6 +150,7 @@ const TEST_LIB = [
     },
   },
 ];
+const LIB = [...BASE_LIB, ...TEST_LIB_HIGH];
 
 // ---------- Werkzeug ----------
 
@@ -235,7 +239,9 @@ function routeProblems(r, label) {
   return bad;
 }
 
-// Eigene Flugbahn: jede Verbindung mit einem Sprung, mit mindestens 20 Prozent Reserve
+// Eigene Flugbahn: jede Verbindung mit einem Sprung und Reserve. Der Generator plant Verbindungen mit
+// safeFor(diff) mal 0,9 der Reichweite (bei Schwierigkeit 8 und mehr also 81 Prozent), die Rechnung hier ist
+// unabhängig davon und erlaubt dafür 3 Prozent Rundung, nie aber mehr als 86 Prozent: mindestens 14 Prozent Reserve.
 function trajectoryProblems(r, label) {
   const bad = [];
   for (const { a, b, conn } of hops(r.log)) {
@@ -248,7 +254,8 @@ function trajectoryProblems(r, label) {
     }
     const t = airTimeSim(dy);
     const reach = PHYS.MOVE_SPEED * t;
-    if (!(t > 0) || needed > reach * 0.8) bad.push(`${label}: Lücke ${needed.toFixed(0)} px bei Reichweite ${reach.toFixed(0)} px (${a.id} nach ${b.id}, dy ${dy.toFixed(0)})`);
+    const limit = Math.min(0.86, safeFor(b.diff) * 0.9 + 0.03);
+    if (!(t > 0) || needed > reach * limit) bad.push(`${label}: Lücke ${needed.toFixed(0)} px bei Reichweite ${reach.toFixed(0)} px (${a.id} nach ${b.id}, dy ${dy.toFixed(0)})`);
     if (bad.length > 6) break;
   }
   return bad;
@@ -286,8 +293,11 @@ function bfs(platforms, startId, wantIds) {
 
 // Läuft auf a nach rechts, springt an der Kante (Taste hold Schritte lang gehalten, kein Doppelsprung) und meldet,
 // ob der Spieler auf b landet. brakeAt: nach so vielen Schritten in der Luft wird die Richtung losgelassen.
-// Die Welt besteht nur aus a und b.
-function realHop(a, b, { hold = 45, brakeAt = Infinity } = {}) {
+// Die Welt besteht nur aus a und b. Der Standard ist der volle Sprung ohne Gleiten: der Scheitel liegt nach 21,5
+// Schritten, die Sprungtaste bis dahin halten und danach loslassen (hold 22). Wer länger hält, gleitet (hold 45),
+// das verlängert den Sprung, ist aber nicht, worauf sich der Generator verlässt.
+const FULL_HOP = 22;
+function realHop(a, b, { hold = FULL_HOP, brakeAt = Infinity } = {}) {
   const s = createState({ seed: 1 });
   const pa = createStaticPlatform(s, a.x, a.y, a.w);
   const pb = createStaticPlatform(s, b.x, b.y, b.w);
@@ -315,7 +325,7 @@ function realHop(a, b, { hold = 45, brakeAt = Infinity } = {}) {
 // Wie ein Mensch mit Steuerung: Sprunghöhe und Bremsen dürfen variieren. Gelingt eine Spielweise, ist der Sprung machbar.
 function realHopAny(a, b) {
   let last = null;
-  for (const hold of [45, 28, 18, 12, 8]) {
+  for (const hold of [FULL_HOP, 45, 28, 18, 12, 8]) {
     for (const brakeAt of [Infinity, 22, 14]) {
       last = realHop(a, b, { hold, brakeAt });
       if (last.ok) return last;
@@ -326,7 +336,7 @@ function realHopAny(a, b) {
 
 // ---------- Tests ----------
 
-for (const [name, lib] of [['Test Chunks', TEST_LIB], [`echte Bibliothek (${CHUNKS.length} Chunks)`, CHUNKS]]) {
+for (const [name, lib] of [['Test Chunks', LIB], [`echte Bibliothek (${CHUNKS.length} Chunks)`, CHUNKS]]) {
   test(`${name}: Routenplattformen sind physisch erreichbar, Verbindungen ohne Doppelsprung (40 Seeds, 8000 m)`, () => {
     const bad = [];
     for (const seed of SEEDS) {
@@ -391,7 +401,7 @@ for (const [name, lib] of [['Test Chunks', TEST_LIB], [`echte Bibliothek (${CHUN
   });
 }
 
-for (const [name, lib] of [['Test Chunks', TEST_LIB], [`echte Bibliothek (${CHUNKS.length} Chunks)`, CHUNKS]]) {
+for (const [name, lib] of [['Test Chunks', LIB], [`echte Bibliothek (${CHUNKS.length} Chunks)`, CHUNKS]]) {
   test(`${name}: Sprünge zwischen festen Plattformen in leichten Chunks gelingen mit der echten Spielerphysik`, () => {
     const bad = [];
     let tried = 0;
@@ -411,7 +421,7 @@ for (const [name, lib] of [['Test Chunks', TEST_LIB], [`echte Bibliothek (${CHUN
 
 test('Die Startplattform und der erste Sprung sind für Anfänger großzügig', () => {
   for (const seed of [1, 2, 3, 4, 5]) {
-    const r = build(seed, TEST_LIB, { meters: 400 });
+    const r = build(seed, LIB, { meters: 400 });
     const first = r.log[1];
     const start = r.log[0];
     assert.ok(first.conn && first.chunk);
@@ -427,7 +437,7 @@ test('Verbindungen sind zu Beginn kürzer als später (die Kurve spiegelt sich i
   let ne = 0;
   let nl = 0;
   for (const seed of SEEDS.slice(0, 10)) {
-    const r = build(seed, TEST_LIB);
+    const r = build(seed, LIB);
     for (const { a, b, conn } of hops(r.log)) {
       if (!conn) continue;
       const gap = b.x - (a.x + a.w);
@@ -435,6 +445,31 @@ test('Verbindungen sind zu Beginn kürzer als später (die Kurve spiegelt sich i
     }
   }
   assert.ok(late / nl > early / ne + 10, `früh ${(early / ne).toFixed(0)} px, spät ${(late / nl).toFixed(0)} px`);
+});
+
+test('Die Lücken wachsen mit der Schwierigkeit bis in den Albtraum, bleiben aber unter der Reserve Grenze', () => {
+  const byDiff = (lo, hi) => {
+    const out = [];
+    for (const seed of SEEDS.slice(0, 12)) {
+      const r = build(seed, LIB, { meters: 6000 });
+      for (const { a, b, conn } of hops(r.log)) {
+        if (!conn || b.diff < lo || b.diff >= hi) continue;
+        const dy = b.y - a.y;
+        out.push({ gap: b.x - (a.x + a.w), use: Math.max(0, b.x - a.x - a.w - PHYS.W) / (PHYS.MOVE_SPEED * airTimeSim(dy)) });
+      }
+    }
+    return out;
+  };
+  const mean = (xs, k) => xs.reduce((p, q) => p + q[k], 0) / xs.length;
+  const easy = byDiff(1, 2);
+  const mid = byDiff(4, 6);
+  const hard = byDiff(8, 10);
+  assert.ok(easy.length > 100 && mid.length > 100 && hard.length > 100, `${easy.length} / ${mid.length} / ${hard.length}`);
+  assert.ok(mean(mid, 'gap') > mean(easy, 'gap') + 40, `leicht ${mean(easy, 'gap').toFixed(0)} px, mittel ${mean(mid, 'gap').toFixed(0)} px`);
+  assert.ok(mean(hard, 'gap') > mean(mid, 'gap') + 20, `mittel ${mean(mid, 'gap').toFixed(0)} px, schwer ${mean(hard, 'gap').toFixed(0)} px`);
+  // Im Albtraum nutzt eine Verbindung im Mittel gut zwei Drittel der Sprungweite, nie mehr als 81 Prozent
+  assert.ok(mean(hard, 'use') > 0.65, `Auslastung ${mean(hard, 'use').toFixed(2)}`);
+  assert.ok(Math.max(...hard.map((x) => x.use)) <= 0.81 + 0.02, `größte Auslastung ${Math.max(...hard.map((x) => x.use)).toFixed(2)}`);
 });
 
 test('Hilfsmittel der Prüfung: Sprung an der Grenze der Reichweite scheitert wirklich', () => {

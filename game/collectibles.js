@@ -1,11 +1,12 @@
 // Sterne, fallende Sterne, Sternmagnet und Powerups.
-// Hier und nur hier laufen power.dashT und power.magnetT herunter. Den Schild verbraucht player.js.
+// Hier und nur hier laufen power.dashT, power.magnetT und power.double herunter. Den Schild verbraucht player.js.
+// Doppelpunkte wirken über addBonus in scoring.js: solange power.double > 0 zählt jeder Bonus doppelt.
 // Es gibt keinen Zufall in diesem Modul. Die Listen werden an Ort und Stelle verdichtet,
 // damit pro Schritt nichts allokiert wird.
 
 import { H, POWERUPS } from './constants.js';
 import { emit } from './particles.js';
-import { collectStar, popup } from './scoring.js';
+import { collectStar, popup, sfx } from './scoring.js';
 
 const COLLECT_X = 26; // Stern: Abstand zum Spielerzentrum
 const COLLECT_Y = 30;
@@ -15,8 +16,8 @@ const FALL_GONE = H + 40; // darunter ist ein fallender Stern verschwunden
 const MAGNET_FX_RATE = 5; // Magnet Funken pro Sekunde (sparsam)
 const MAGNET_FX_STARS = 2; // höchstens so viele gezogene Sterne funkeln pro Funken Takt
 
-const KINDS = ['shield', 'dash', 'magnet', 'feather'];
-const BURST = { shield: 'shield', dash: 'dash', magnet: 'magnet', feather: 'doublejump' };
+const KINDS = ['shield', 'dash', 'magnet', 'feather', 'double'];
+const BURST = { shield: 'shield', dash: 'dash', magnet: 'magnet', feather: 'doublejump', double: 'confetti' };
 
 // Zählt einen Timer herunter, kaputte Werte werden zu 0
 const tick = (v, dt) => (v > 0 ? Math.max(0, v - dt) : 0);
@@ -29,8 +30,10 @@ function applyPowerup(s, type, x, y) {
   if (type === 'shield') p.power.shield = true;
   else if (type === 'dash') p.power.dashT = def.duration;
   else if (type === 'magnet') p.power.magnetT = def.duration;
+  else if (type === 'double') p.power.double = def.duration;
   else p.power.feather = Math.min(def.maxCharges, (p.power.feather > 0 ? p.power.feather : 0) + 1);
   popup(s, p.x + p.w / 2, p.y - 10, def.label, { color: def.color, size: 17, dur: 1.2 });
+  sfx(s, 'powerup');
   emit(s, BURST[type], x, y, { color: def.color });
   emit(s, 'star', x, y, { color: def.color });
   return true;
@@ -54,6 +57,9 @@ export function updateCollectibles(s, dt) {
   const magnetBefore = pw.magnetT;
   pw.dashT = tick(pw.dashT, dt);
   pw.magnetT = tick(pw.magnetT, dt);
+  // Doppelpunkte zählen erst am Ende des Schritts herunter: Sterne, die in dem Schritt eingesammelt werden,
+  // in dem noch Zeit war, zählen noch doppelt. Ein frisch eingesammeltes Powerup behält seine volle Dauer.
+  let gotDouble = false;
   const fx = magnetOn && Math.floor(magnetBefore * MAGNET_FX_RATE) !== Math.floor(pw.magnetT * MAGNET_FX_RATE);
   const radius = POWERUPS.magnet.radius;
   const r2 = radius * radius;
@@ -120,10 +126,11 @@ export function updateCollectibles(s, dt) {
     if (pu.got) continue;
     if (alive && Math.hypot(pu.x - cx, pu.y - cy) < POWERUP_RADIUS) {
       pu.got = true;
-      applyPowerup(s, pu.type, pu.x, pu.y);
+      if (applyPowerup(s, pu.type, pu.x, pu.y) && pu.type === 'double') gotDouble = true;
       continue;
     }
     ups[keep++] = pu;
   }
   ups.length = keep;
+  if (!gotDouble) pw.double = tick(pw.double, dt);
 }

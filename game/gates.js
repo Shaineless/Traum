@@ -1,9 +1,9 @@
-// Traumtore: Bonus, Heilung und Weltwechsel. Das Tor selbst baut der Generator (b.gate).
+// Traumtore: Bonus, Heilung, Wurfstern und Weltwechsel. Das Tor selbst baut der Generator (b.gate).
 // Der Weltwechsel steckt in s.world, themeAt() in theme.js überblendet danach die Farben.
 
-import { GATE, MAX_LIVES, SCORE, W, WORLDS } from './constants.js';
+import { ABILITY, GATE, MAX_LIVES, SCORE, W, WORLDS } from './constants.js';
 import { emit } from './particles.js';
-import { addBonus, banner, flash, popup, shake } from './scoring.js';
+import { addBonus, banner, flash, popup, sfx, shake } from './scoring.js';
 
 const BLEND_TIME = 3; // so lange blendet eine Welt in die nächste
 const ANIM_BEHIND = 200; // nur Tore im Bild (mit Rand) bekommen ihre Animationszeit
@@ -13,6 +13,7 @@ const FLASH = { COLOR: '#ffffff', AMOUNT: 0.55 };
 const SHAKE = 3;
 const BONUS_COLOR = '#ffe27a';
 const HEAL_COLOR = '#ff9ab4';
+const AMMO_COLOR = '#ffd966';
 
 function passGate(s, g) {
   const p = s.player;
@@ -20,17 +21,26 @@ function passGate(s, g) {
   const cx = p.x + p.w / 2;
   g.passed = true;
 
-  // Bonus wächst mit der Nummer des Tors
+  // Bonus wächst mit der Nummer des Tors. Das Popup zeigt, was wirklich gutgeschrieben wurde (Doppelpunkte).
   const index = g.index > 0 ? g.index : 1;
-  const bonus = SCORE.GATE * index;
-  addBonus(s, bonus);
-  popup(s, cx, p.y - 14, `+${bonus}`, { color: BONUS_COLOR, size: 20, dur: 1.3 });
+  const before = s.run.bonus;
+  addBonus(s, SCORE.GATE * index);
+  popup(s, cx, p.y - 14, `+${s.run.bonus - before}`, { color: BONUS_COLOR, size: 20, dur: 1.3 });
 
   // Ein Leben dazu, aber nie über das Maximum
   if (s.lives < MAX_LIVES) {
     s.lives = Math.min(MAX_LIVES, s.lives + GATE.HEAL);
     popup(s, cx, p.y - 40, '+1 Leben', { color: HEAL_COLOR, size: 18, dur: 1.5 });
   }
+
+  // Ein Wurfstern dazu, aber nie über den Vorrat. Ist er voll, wächst auch der Ladestand nicht weiter.
+  const ammo = p.ammo > 0 ? p.ammo : 0; // kaputte Werte zählen als 0
+  if (ammo < ABILITY.AMMO.MAX) {
+    p.ammo = Math.min(ABILITY.AMMO.MAX, ammo + 1);
+    popup(s, cx, p.y - 66, '+1 Wurfstern', { color: AMMO_COLOR, size: 16, dur: 1.4 });
+  }
+  if (p.ammo >= ABILITY.AMMO.MAX) p.starAcc = 0;
+  sfx(s, 'gate');
 
   // Weltwechsel: die bisherige Welt blendet über world.blend in die neue
   w.from = w.to;

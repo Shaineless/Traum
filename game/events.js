@@ -6,8 +6,10 @@ import { EVENTS, GATE, LIMITS, METER, SCORE, START_X, W, gateMeter } from './con
 import { createStar } from './entities.js';
 import { emit } from './particles.js';
 import { chance, pickWeighted, range } from './rng.js';
-import { banner, meters } from './scoring.js';
+import { banner, meters, sfx } from './scoring.js';
 
+// Nur diese Typen kennt dieses Modul. Neue Einträge in EVENTS (auch Zahlen wie FIRST_METER) werden ignoriert,
+// solange sie hier nicht mit Gewicht, Text und Ablauf eingetragen sind.
 const TYPES = ['meteor', 'supermoon', 'storm', 'shower'];
 const WEIGHTS = { meteor: 3, supermoon: 2, shower: 2, storm: 2 };
 const STORM_FROM = 800; // Meter: erst ab hier kommt der Traumsturm
@@ -62,6 +64,9 @@ export function eventWindVx(s) {
 
 // ---------- Start und Ende ----------
 
+// Bekannter Typ mit gültigem Eintrag in EVENTS (Name und Dauer)
+const knownType = (type) => TYPES.includes(type) && !!EVENTS[type] && EVENTS[type].dur > 0 && typeof EVENTS[type].name === 'string';
+
 function endEvent(s) {
   const ev = s.events;
   ev.active = null;
@@ -70,7 +75,7 @@ function endEvent(s) {
 }
 
 export function startEvent(s, type) {
-  if (!TYPES.includes(type)) return false;
+  if (!knownType(type)) return false;
   const ev = s.events;
   if (ev.active) endEvent(s);
   const data = {};
@@ -89,6 +94,7 @@ export function startEvent(s, type) {
   ev.starBoost = type === 'supermoon';
   ev.enemyBoost = type === 'storm';
   banner(s, EVENTS[type].name, TEXT[type], BANNER_TIME);
+  sfx(s, 'event');
   return true;
 }
 
@@ -217,7 +223,7 @@ export function updateEvents(s, dt) {
     if (!s.player.dead) plan(s);
     return;
   }
-  if (!TYPES.includes(a.type) || !(a.dur > 0) || !a.data) {
+  if (!knownType(a.type) || !(a.dur > 0) || !a.data) {
     endEvent(s);
     return;
   }

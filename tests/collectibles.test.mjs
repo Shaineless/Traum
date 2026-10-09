@@ -4,9 +4,10 @@ import { H, POWERUPS, SCORE, STEP } from '../game/constants.js';
 import { createPowerup, createStar } from '../game/entities.js';
 import { createState } from '../game/state.js';
 import { emit } from '../game/particles.js';
+import { addBonus, registerKill } from '../game/scoring.js';
 import { givePowerup, updateCollectibles } from '../game/collectibles.js';
 import { stepSim } from '../game/sim.js';
-import { input, newGame } from './helpers.mjs';
+import { input, invariants, newGame } from './helpers.mjs';
 
 // ---------- Hilfen ----------
 
@@ -223,14 +224,23 @@ test('kaputte Timerwerte werden zu 0', () => {
   const s = world();
   s.player.power.dashT = NaN;
   s.player.power.magnetT = -3;
+  s.player.power.double = NaN;
   tick(s);
   assert.equal(s.player.power.dashT, 0);
   assert.equal(s.player.power.magnetT, 0);
+  assert.equal(s.player.power.double, 0);
+  s.player.power.double = -2;
+  tick(s);
+  assert.equal(s.player.power.double, 0);
+  delete s.player.power.double; // ältere Zustände kennen das Feld noch nicht
+  assert.doesNotThrow(() => tick(s));
+  assert.equal(s.player.power.double, 0);
 });
 
 test('Schritte ohne Zeit verändern nichts', () => {
   const s = world();
   s.player.power.dashT = 4;
+  s.player.power.double = 6;
   star(s, 0, 0);
   powerup(s, 'dash', 0, 0);
   const before = structuredClone(s);
@@ -242,9 +252,11 @@ test('im Spiel zählt nur collectibles.js die Zeit herunter', () => {
   const s = newGame(5);
   s.player.power.dashT = 8;
   s.player.power.magnetT = 8;
+  s.player.power.double = 8;
   for (let i = 0; i < 60; i++) stepSim(s, input(), STEP);
   assert.ok(Math.abs(s.player.power.dashT - 7) < 0.1, `dashT ${s.player.power.dashT}`);
   assert.ok(Math.abs(s.player.power.magnetT - 7) < 0.1, `magnetT ${s.player.power.magnetT}`);
+  assert.ok(Math.abs(s.player.power.double - 7) < 0.1, `double ${s.player.power.double}`);
 });
 
 // ---------- Powerups ----------
@@ -300,7 +312,7 @@ test('Feder erhöht die Ladungen bis maxCharges und verbraucht sich auch am Maxi
 });
 
 test('Popup zeigt das Label des Powerups', () => {
-  for (const type of ['shield', 'dash', 'magnet', 'feather']) {
+  for (const type of ['shield', 'dash', 'magnet', 'feather', 'double']) {
     const s = world();
     powerup(s, type, 0, 0);
     tick(s);
@@ -317,14 +329,15 @@ test('Powerup erzeugt Partikel', { skip: needsParticles }, () => {
   assert.ok(s.particles.length > 0);
 });
 
-test('givePowerup wirkt direkt und kennt nur die vier Typen', () => {
+test('givePowerup wirkt direkt und kennt nur die fünf Typen', () => {
   const s = world();
   assert.equal(givePowerup(s, 'shield'), true);
   assert.equal(givePowerup(s, 'dash'), true);
   assert.equal(givePowerup(s, 'magnet'), true);
   assert.equal(givePowerup(s, 'feather'), true);
+  assert.equal(givePowerup(s, 'double'), true);
   const p = s.player.power;
-  assert.deepEqual(p, { shield: true, dashT: 8, magnetT: 8, feather: 1 });
+  assert.deepEqual(p, { shield: true, dashT: 8, magnetT: 8, feather: 1, double: 10 });
   const before = structuredClone(s);
   for (const bad of ['nope', 'constructor', '', undefined, null, 7]) assert.equal(givePowerup(s, bad), false);
   assert.deepEqual(s, before);
@@ -335,7 +348,7 @@ test('ein Powerup mit unbekanntem Typ wird entfernt, ohne etwas zu bewirken', ()
   powerup(s, 'banane', 0, 0);
   tick(s);
   assert.equal(s.powerups.length, 0);
-  assert.deepEqual(s.player.power, { shield: false, dashT: 0, magnetT: 0, feather: 0 });
+  assert.deepEqual(s.player.power, { shield: false, dashT: 0, magnetT: 0, feather: 0, double: 0 });
 });
 
 test('Powerup im Spiel: einsammeln, Wirkung, Zeitablauf', () => {
@@ -347,6 +360,148 @@ test('Powerup im Spiel: einsammeln, Wirkung, Zeitablauf', () => {
   assert.equal(pu.got, true);
   assert.equal(s.powerups.includes(pu), false);
   assert.ok(p.power.dashT > 7.9 && p.power.dashT <= 8);
+});
+
+// ---------- Doppelpunkte ----------
+
+test('Doppelpunkte: das Powerup setzt power.double auf die volle Dauer und addiert nicht', () => {
+  const s = world();
+  assert.equal(s.player.power.double, 0);
+  powerup(s, 'double', 0, 0);
+  tick(s);
+  assert.equal(s.player.power.double, POWERUPS.double.duration);
+  assert.equal(POWERUPS.double.duration, 10);
+  tick(s, 120);
+  assert.ok(Math.abs(s.player.power.double - 8) < 1e-6, `double ${s.player.power.double}`);
+  powerup(s, 'double', 0, 0);
+  tick(s);
+  assert.equal(s.player.power.double, POWERUPS.double.duration, 'wird aufgefüllt, nicht addiert');
+  assert.equal(s.powerups.length, 0);
+});
+
+test('Doppelpunkte: der Timer zählt herunter und wird nie negativ', () => {
+  const s = world();
+  s.player.power.double = 2;
+  tick(s, 60);
+  assert.ok(Math.abs(s.player.power.double - 1) < 1e-9);
+  let last = s.player.power.double;
+  for (let i = 0; i < 200; i++) {
+    tick(s);
+    assert.ok(s.player.power.double >= 0 && s.player.power.double <= last);
+    last = s.player.power.double;
+  }
+  assert.equal(s.player.power.double, 0);
+});
+
+test('Doppelpunkte: Sterne zählen doppelt, solange Zeit da ist, danach wieder einfach', () => {
+  const s = world();
+  s.player.power.double = 1;
+  star(s, 0, 0);
+  star(s, 5, 0, { value: SCORE.RISK_STAR, bonus: 'risk' });
+  star(s, -5, 0, { value: SCORE.EVENT_STAR, bonus: 'event' });
+  tick(s);
+  assert.equal(s.run.bonus, 2 * (SCORE.STAR + SCORE.RISK_STAR + SCORE.EVENT_STAR));
+  assert.equal(s.run.stars, 3, 'die Zahl der Sterne bleibt einfach');
+  tick(s, 61);
+  assert.equal(s.player.power.double, 0);
+  const before = s.run.bonus;
+  star(s, 0, 0);
+  tick(s);
+  assert.equal(s.run.bonus - before, SCORE.STAR);
+});
+
+test('Doppelpunkte: im letzten Schritt mit Restzeit zählt noch doppelt, danach nicht mehr', () => {
+  const s = world();
+  s.player.power.double = STEP;
+  star(s, 0, 0);
+  tick(s);
+  assert.equal(s.run.bonus, 2 * SCORE.STAR);
+  assert.equal(s.player.power.double, 0);
+  star(s, 0, 0);
+  tick(s);
+  assert.equal(s.run.bonus, 3 * SCORE.STAR);
+});
+
+test('Doppelpunkte: addBonus verdoppelt jeden Bonus, kaputte Werte zählen einfach', () => {
+  const s = world();
+  addBonus(s, 7);
+  assert.equal(s.run.bonus, 7);
+  s.player.power.double = 3;
+  addBonus(s, 7);
+  assert.equal(s.run.bonus, 21);
+  for (const bad of [0, -1, NaN, undefined]) {
+    s.player.power.double = bad;
+    addBonus(s, 1);
+  }
+  assert.equal(s.run.bonus, 25);
+});
+
+test('Doppelpunkte: nach dem Einsammeln zählen die nächsten Sterne doppelt', () => {
+  const s = world();
+  powerup(s, 'double', 0, 0);
+  tick(s);
+  assert.equal(s.run.bonus, 0);
+  star(s, 0, 0);
+  tick(s);
+  assert.equal(s.run.bonus, 2 * SCORE.STAR);
+});
+
+test('Doppelpunkte: auch vom Magnet gezogene Sterne und Gegner Treffer zählen doppelt', () => {
+  const s = world();
+  s.player.power.double = 5;
+  s.player.power.magnetT = 5;
+  star(s, 150, 0);
+  tick(s, 30);
+  assert.equal(s.run.stars, 1);
+  assert.equal(s.run.bonus, 2 * SCORE.STAR);
+  const before = s.run.bonus;
+  const pts = registerKill(s, { x: 0, y: 0, w: 10, h: 10 }, 'stomp');
+  assert.equal(s.run.bonus - before, 2 * pts);
+});
+
+test('Doppelpunkte: im echten Simulationsschritt', () => {
+  const s = newGame(6);
+  const p = s.player;
+  p.power.double = 5;
+  s.stars.push(createStar(s, p.x + p.w / 2, p.y + p.h / 2));
+  stepSim(s, input(), STEP);
+  assert.equal(s.run.bonus, 2 * SCORE.STAR);
+  assert.ok(Math.abs(p.power.double - (5 - STEP)) < 1e-6);
+});
+
+// ---------- Ton und Typen ----------
+
+test('jedes eingesammelte Powerup spielt den Ton powerup, ein Stern nicht', () => {
+  const s = world();
+  star(s, 0, 0);
+  tick(s);
+  assert.equal(s.sfx.filter((e) => e.n === 'powerup').length, 0);
+  powerup(s, 'shield', 0, 0);
+  powerup(s, 'double', 5, 0);
+  tick(s);
+  assert.equal(s.sfx.filter((e) => e.n === 'powerup').length, 2);
+  givePowerup(s, 'feather');
+  assert.equal(s.sfx.filter((e) => e.n === 'powerup').length, 3);
+  const n = s.sfx.length;
+  givePowerup(s, 'nope');
+  assert.equal(s.sfx.length, n, 'unbekannte Typen bleiben stumm');
+});
+
+test('POWERUPS und collectibles.js kennen dieselben fünf Typen', () => {
+  assert.deepEqual(Object.keys(POWERUPS).sort(), ['dash', 'double', 'feather', 'magnet', 'shield']);
+  for (const type of Object.keys(POWERUPS)) {
+    const s = world();
+    assert.equal(givePowerup(s, type), true, type);
+    assert.equal(s.popups[s.popups.length - 1].text, POWERUPS[type].label);
+    if (REAL_PARTICLES) assert.ok(s.particles.length > 0, `${type} erzeugt Partikel`);
+  }
+});
+
+test('Doppelpunkte: Label und Farbe stehen in den Konstanten, ohne Striche', () => {
+  assert.equal(POWERUPS.double.label, 'Doppelpunkte');
+  assert.match(POWERUPS.double.color, /^#[0-9a-f]{6}$/i);
+  const dashes = ['-', String.fromCharCode(0x2013), String.fromCharCode(0x2014)];
+  for (const def of Object.values(POWERUPS)) assert.ok(!dashes.some((d) => def.label.includes(d)), def.label);
 });
 
 // ---------- Fallende Sterne ----------
@@ -472,4 +627,108 @@ test('Zustand bleibt kopierbar und kopierte Läufe verlaufen gleich', () => {
   assert.deepEqual(a.run, b.run);
   assert.deepEqual(a.player.power, b.player.power);
   assert.doesNotThrow(() => structuredClone(a));
+});
+
+// ---------- Fuzz ----------
+
+// Kleiner eigener Zufall nur für die Tests (mulberry32), die Spiellogik bleibt unberührt
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let x = a;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Ein Fuzz Lauf. Prüft jeden Schritt gegen ein einfaches Modell der Regeln und gibt den Endzustand zurück.
+function fuzzRun(seed, steps = 300) {
+  const r = prng(seed);
+  const rr = (a, b) => a + r() * (b - a);
+  const s = world();
+  const TYPES = ['shield', 'dash', 'magnet', 'feather', 'double', 'banane'];
+  const pw = s.player.power;
+  // Start mit kaputten oder echten Werten
+  for (const k of ['dashT', 'magnetT', 'double']) pw[k] = r() < 0.2 ? [NaN, -3, undefined][Math.floor(r() * 3)] : rr(0, 4);
+  const dts = [STEP, STEP, STEP, 1 / 30, 0.1, 0.5];
+
+  for (let i = 0; i < steps; i++) {
+    // Welt auffüllen: Sterne und Powerups rund um den Spieler
+    if (r() < 0.5) {
+      const kind = r();
+      const o = kind < 0.6 ? {} : kind < 0.8 ? { falling: true, bonus: 'risk', value: SCORE.RISK_STAR } : { bonus: 'event', value: SCORE.EVENT_STAR, falling: r() < 0.5 };
+      star(s, rr(-200, 200), rr(-120, 80), o);
+    }
+    if (r() < 0.12) powerup(s, TYPES[Math.floor(r() * TYPES.length)], rr(-60, 60), rr(-40, 40));
+    if (r() < 0.05) s.player.dead = !s.player.dead;
+    if (r() < 0.3) { s.player.x += rr(-40, 60); s.player.y = rr(150, 340); }
+    if (r() < 0.08) pw.magnetT = rr(0, 3);
+    if (r() < 0.04) pw.double = rr(0, 2);
+
+    const dt = r() < 0.04 ? [0, -1, NaN][Math.floor(r() * 3)] : dts[Math.floor(r() * dts.length)];
+    const validDt = dt > 0;
+    const startStars = s.stars.filter((st) => !st.got);
+    const startUps = s.powerups.filter((pu) => !pu.got);
+    const t0 = { dashT: pw.dashT > 0 ? pw.dashT : 0, magnetT: pw.magnetT > 0 ? pw.magnetT : 0, double: pw.double > 0 ? pw.double : 0 };
+    const bonus0 = s.run.bonus;
+    const count0 = s.run.stars;
+    const dead = s.player.dead;
+    const frozen = validDt ? null : structuredClone(s);
+
+    s.t += validDt ? dt : 0;
+    updateCollectibles(s, dt);
+
+    if (!validDt) {
+      assert.deepEqual(s, frozen, 'ungültige Zeit verändert nichts');
+      continue;
+    }
+
+    // Modell: Sterne zählen doppelt, wenn zu Beginn des Schritts Doppelpunkte Zeit hatten
+    const got = startStars.filter((st) => st.got);
+    const gotUps = startUps.filter((pu) => pu.got);
+    assert.equal(s.run.stars - count0, got.length);
+    assert.equal(s.run.bonus - bonus0, got.reduce((sum, st) => sum + st.value * (t0.double > 0 ? 2 : 1), 0), `Schritt ${i}`);
+    if (dead) {
+      assert.equal(got.length + gotUps.length, 0, 'ein toter Spieler sammelt nichts');
+    }
+    for (const st of s.stars) assert.equal(st.got, false);
+    for (const pu of s.powerups) assert.equal(pu.got, false);
+    for (const pu of gotUps) assert.ok(!s.powerups.includes(pu));
+
+    // Modell der Timer: frisch eingesammelte Powerups haben die volle Dauer, sonst zählt die Zeit herunter
+    const picked = (type) => gotUps.some((pu) => pu.type === type);
+    const expect = (type, start) => (picked(type) ? POWERUPS[type].duration : Math.max(0, start - dt));
+    assert.ok(Math.abs(pw.dashT - expect('dash', t0.dashT)) < 1e-9, `dashT Schritt ${i}`);
+    assert.ok(Math.abs(pw.magnetT - expect('magnet', t0.magnetT)) < 1e-9, `magnetT Schritt ${i}`);
+    assert.ok(Math.abs(pw.double - expect('double', t0.double)) < 1e-9, `double Schritt ${i}`);
+    assert.ok(pw.double >= 0 && pw.double <= POWERUPS.double.duration);
+    assert.ok(pw.feather >= 0 && pw.feather <= POWERUPS.feather.maxCharges);
+    assert.ok(s.sfx.length <= 16);
+    if (i % 25 === 0) assert.deepEqual(invariants(s), []);
+  }
+  assert.deepEqual(invariants(s), []);
+  return s;
+}
+
+test('Fuzz: Sterne und Powerups gegen ein einfaches Modell, kaputte Werte und Zeiten inklusive', () => {
+  for (let seed = 1; seed <= 40; seed++) fuzzRun(seed);
+});
+
+test('Fuzz: gleicher Zufall gibt gleichen Endzustand, ein Klon läuft gleich weiter', () => {
+  const a = fuzzRun(77);
+  const b = fuzzRun(77);
+  assert.deepEqual(a, b);
+  const c = structuredClone(a);
+  for (const x of [a, c]) {
+    x.player.power.double = 2;
+    star(x, 0, 0);
+    star(x, 10, 0);
+    for (let i = 0; i < 20; i++) {
+      x.t += STEP;
+      updateCollectibles(x, STEP);
+    }
+  }
+  assert.deepEqual(a, c);
 });
