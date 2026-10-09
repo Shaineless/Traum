@@ -1,7 +1,7 @@
 # ComfyUI Workflow: 4K 60 FPS (speicherschonend)
 
-Datei: `4K 60 FPS.json` – in ComfyUI per Drag & Drop ins Fenster ziehen, dann
-**Workflow → Speichern unter…** und `4K 60 FPS` nennen.
+Datei: `4K 60 FPS.json` – in ComfyUI per Drag & Drop ins Fenster ziehen (oder Workflow → Öffnen),
+dann **Workflow → Speichern unter…** und `4K 60 FPS` nennen.
 
 ## Benötigte Custom Nodes (ComfyUI-Manager → "Install Missing Custom Nodes")
 - ComfyUI-VideoHelperSuite (Video laden/speichern)
