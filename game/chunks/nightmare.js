@@ -1004,8 +1004,10 @@ export const NIGHTMARE = [
       let y = 0;
       for (let i = 0; i < plan.length; i++) {
         const dbl = plan[i] === 'd';
-        const ny = clamp(y + b.pick([-30, -16, 0, 14, 28]), -44, 32);
-        const frac = dbl ? b.rand(0.56, 0.64) + 0.03 * k : b.rand(0.84, 0.92);
+        // Doppelsprung Lücken liegen waagerecht oder abwärts: nur dann rechnet reach.js den zweiten Sprung ein, und die Lücke
+        // übersteigt den einfachen Sprung deutlich (mindestens 10 Prozent über seiner Reichweite)
+        const ny = clamp(y + (dbl ? b.pick([0, 12, 24]) : b.pick([-30, -16, 0, 14, 28])), -44, 32);
+        const frac = dbl ? b.rand(0.84, 0.9) + 0.02 * k : b.rand(0.84, 0.92);
         const gap = gapFor(b, y, ny, frac, STORM, dbl);
         const w = b.int(88, 98) - Math.round(4 * k);
         const p = b.cloud(x + gap, ny, w);

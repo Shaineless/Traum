@@ -188,6 +188,257 @@ test('brüchige Plattform: idle, armed, shaking, broken und Wiederkehr', () => {
   assert.doesNotThrow(() => draw(make('seltsam', { alpha: undefined, shakeX: undefined, timer: NaN })));
 });
 
+// ---------- Sprungwolke, Eiswolke, Blinkwolke ----------
+
+const spring = (press = 0, o = {}) => {
+  const s = blank();
+  const p = createSpringPlatform(s, 200, 250, 120);
+  p.press = press;
+  Object.assign(p, o);
+  s.platforms.push(p);
+  return s;
+};
+
+// Die Skalierung des Körpers (Eindrücken): erster scale Aufruf, der nur den Körper staucht
+const squash = (ctx) => named(ctx, 'scale').find((c) => c[1] >= 1 && c[1] < 1.2 && c[2] <= 1 && c[2] > 0.5 && (c[1] > 1 || c[2] < 1) ) || ['scale', 1, 1];
+
+test('Sprungwolke: korallenfarben, Feder Symbol, Pfeile nach oben, klar anders als eine normale Wolke', () => {
+  const plain = blank();
+  floater(plain, 200, 250, 120);
+  const cp = draw(plain, { reduceMotion: true });
+  const cs = draw(spring(0), { reduceMotion: true });
+  assert.ok(shapes(cs).length > shapes(cp).length + 15, 'Sprungwolke hat deutlich mehr Form');
+  assert.notEqual(sig(cs), sig(cp));
+  assert.ok(assigned(cs, 'fillStyle').includes('#e8694f'), 'koralle Federbauch');
+  assert.ok(!assigned(cp, 'fillStyle').includes('#e8694f'));
+  // Die Feder ist ein Zickzack: fünf kurze Linien abwechselnd nach links und rechts, dunkel unterlegt und hell gezeichnet
+  const zig = named(cs, 'lineTo').filter((c) => c[2] > 16); // lokale Koordinaten: unter der Platte (Höhe 16)
+  assert.ok(zig.length >= 5, `Feder aus Linien, ${zig.length}`);
+  assert.ok(named(cs, 'stroke').length >= 2 && assigned(cs, 'strokeStyle').includes('#a63a2c') && assigned(cs, 'strokeStyle').includes('#fff3da'), 'dunkel unterlegt, hell darüber');
+  const xs = new Set(zig.map((c) => Math.round(c[1])));
+  assert.ok(xs.size >= 3, 'die Feder pendelt nach links und rechts');
+  // Pfeilspitzen über der Platte zeigen: hier geht es hoch (Form statt Farbe). Sie liegen oberhalb der Oberkante (y 0)
+  const arrows = named(cs, 'lineTo').filter((c) => c[2] < -2);
+  assert.ok(arrows.length >= 4, 'Pfeilspitzen über der Platte');
+  // Das leichte Leuchten: ein Verlauf, der als Fläche über die Wolke gezogen wird
+  assert.ok(named(cs, 'fillRect').length >= 1);
+  // Fernab gezeichnet bleibt dieselbe Form (nur verschoben)
+  const moved = blank();
+  moved.platforms.push(createSpringPlatform(moved, 640, 250, 120));
+  assert.equal(shapes(draw(moved, { reduceMotion: true })).length, shapes(cs).length);
+});
+
+test('Sprungwolke: press drückt sie zusammen, bei reduceMotion weniger, kaputte Werte werfen nicht', () => {
+  const sy = (press, o) => squash(draw(spring(press), o))[2];
+  const sx = (press, o) => squash(draw(spring(press), o))[1];
+  assert.equal(sy(0), 1, 'ohne Druck keine Stauchung');
+  assert.ok(sy(0.5) < sy(0.25) && sy(1) < sy(0.5), 'tiefer eingedrückt, flacher');
+  assert.ok(sx(1) > sx(0.5) && sx(0.5) > sx(0), 'dabei breiter');
+  assert.ok(sy(1) < 0.75 && sy(1) > 0.5, 'Stauchung sichtbar, aber nicht flach');
+  assert.ok(sy(1, { reduceMotion: true }) > sy(1) + 0.1, 'ruhiger bei reduceMotion');
+  assert.ok(sy(1, { reduceMotion: true }) < 1);
+
+  // Beim Abprall kommen Ring und Strahlen über der Platte dazu
+  const strokes = (press) => named(draw(spring(press), { reduceMotion: true }), 'stroke').length;
+  assert.ok(strokes(0.9) > strokes(0), 'Abprall Ring');
+  const ring = (press) => named(draw(spring(press), { reduceMotion: true }), 'ellipse').filter((c) => c[2] === -1);
+  assert.equal(ring(0).length, 0);
+  assert.equal(ring(0.9).length, 1);
+  // Der Ring weitet sich, solange press abklingt
+  assert.ok(ring(0.3)[0][3] > ring(0.9)[0][3], 'Ring wird weiter, je weiter der Abprall ist');
+
+  for (const press of [NaN, undefined, null, -3, 7, Infinity, '0.5']) {
+    const ctx = draw(spring(press), {});
+    assert.equal(allArgsFinite(ctx), true, `press ${press}`);
+    assert.ok(shapes(ctx).length > 20);
+  }
+  const wide = blank();
+  wide.platforms.push(createSpringPlatform(wide, 100, 250, 400), createSpringPlatform(wide, 600, 250, 40));
+  assert.equal(allArgsFinite(draw(wide)), true);
+});
+
+test('Sprungwolke: schwebende Pfeile und Leuchten nur ohne reduceMotion', () => {
+  const s = spring(0);
+  assert.ok(new Set([0.2, 0.9, 1.7, 3.3].map((time) => sig(draw(s, { time })))).size > 1, 'Pfeile steigen auf');
+  assert.equal(new Set([0.2, 0.9, 1.7, 3.3, 9.1].map((time) => sig(draw(s, { time, reduceMotion: true })))).size, 1);
+});
+
+const iceFloater = (w = 160, o = {}) => {
+  const s = blank();
+  const p = createStaticPlatform(s, 200, 250, w, { slick: true });
+  Object.assign(p, o);
+  s.platforms.push(p);
+  return s;
+};
+const iceGround = (w = 300) => {
+  const s = blank();
+  s.platforms.push(createStaticPlatform(s, 100, 360, w, { ground: true, slick: true }));
+  return s;
+};
+
+test('Eiswolke: bläulich weiß, kristallin, Glanzstreifen und Glitzer, klar anders als eine normale Wolke', () => {
+  const plain = blank();
+  floater(plain, 200, 250, 160);
+  const cp = draw(plain, { reduceMotion: true });
+  const ci = draw(iceFloater(), { reduceMotion: true });
+  assert.notEqual(sig(ci), sig(cp));
+  assert.ok(shapes(ci).length > shapes(cp).length + 40, 'Eis hat Zapfen, Streifen, Kristalle');
+  assert.ok(assigned(ci, 'fillStyle').includes('#f6fdff'), 'Eisweiß');
+  assert.ok(assigned(ci, 'fillStyle').includes('#9ccaf4'), 'Eiszapfen');
+  assert.ok(!assigned(cp, 'fillStyle').includes('#f6fdff'));
+  assert.ok(assigned(ci, 'strokeStyle').includes('#ffffff'), 'weißer Glanz an der Oberkante');
+  // Eiszapfen unter dem Körper: Dreiecke, die nach unten über die Unterkante (lokal y 16) hinausragen
+  assert.ok(named(ci, 'lineTo').filter((c) => c[2] > 16 + 4).length >= 4, 'Zapfen hängen nach unten');
+  // Kristalline Platte: nur Linien, keine runde Pillenform (der Körper ist ein Polygon mit abgeschrägten Ecken)
+  assert.equal(named(ci, 'roundRect').length, 0);
+  assert.ok(named(cp, 'roundRect').length > 0);
+  // Glanzstreifen sind Parallelogramme innerhalb der Platte (schräg: oben rechts weiter als unten)
+  const clipped = named(ci, 'clip').length;
+  assert.ok(clipped >= 1, 'Streifen werden an der Platte beschnitten');
+  // Glitzer: vierzackige Sterne aus Kurven
+  assert.ok(named(ci, 'quadraticCurveTo').length >= 4, 'mindestens ein Glitzerstern');
+  assert.equal(allArgsFinite(ci), true);
+});
+
+test('Eiswolke: hohe Fläche (ground) ist erkennbar rutschig und anders als der Boden', () => {
+  const g = blank();
+  ground(g, 100, 360, 300);
+  const cg = draw(g, { reduceMotion: true });
+  const ci = draw(iceGround(), { reduceMotion: true });
+  assert.notEqual(sig(ci), sig(cg));
+  assert.ok(assigned(ci, 'fillStyle').includes('#f9feff'), 'glänzende Eisfläche oben');
+  assert.ok(named(ci, 'clip').length > 0, 'wie der Boden mit Beschnitt');
+  assert.ok(named(ci, 'quadraticCurveTo').length >= 4, 'Glitzer an der Oberkante');
+  // Auch eine hohe Platte ohne ground Flag (h über 60) wird als Eisfläche gezeichnet
+  const tall = iceFloater(300, { h: 120 });
+  assert.ok(assigned(draw(tall, { reduceMotion: true }), 'fillStyle').includes('#f9feff'));
+  // Hohe Fläche reicht nur bis zum unteren Bildrand
+  const maxY = maxOf(named(ci, 'lineTo').map((c) => c[2]).concat(named(ci, 'moveTo').map((c) => c[2])));
+  assert.ok(maxY <= 360 + 200 + 1);
+  // Nur der sichtbare Teil bekommt Details: eine sehr lange Fläche braucht nicht viel mehr Aufrufe
+  const long = ops(draw(iceGround(6000), { reduceMotion: true })).length;
+  assert.ok(long < ops(draw(iceGround(300), { reduceMotion: true })).length * 3, `${long} Aufrufe bei 6000 px`);
+});
+
+test('Eiswolke: Lichtband und Glitzer bewegen sich, bei reduceMotion bleibt ein ruhiges Glitzern', () => {
+  for (const make of [() => iceFloater(), () => iceGround()]) {
+    const s = make();
+    assert.ok(new Set([0.3, 1.1, 2.6, 5.2].map((time) => sig(draw(s, { time })))).size > 1);
+    const calm = [0.3, 1.1, 2.6, 5.2].map((time) => draw(s, { time, reduceMotion: true }));
+    assert.equal(new Set(calm.map(sig)).size, 1);
+    assert.ok(named(calm[0], 'quadraticCurveTo').length >= 4, 'ruhig bleibt mindestens ein Stern stehen');
+  }
+  // Jede Eiswolke glitzert zu ihrer Zeit (id)
+  const two = blank();
+  two.platforms.push(createStaticPlatform(two, 100, 250, 160, { slick: true }), createStaticPlatform(two, 400, 250, 160, { slick: true }));
+  assert.equal(allArgsFinite(draw(two, { time: 2 })), true);
+});
+
+const blink = (o = {}, t = 0, w = 110) => {
+  const s = blank();
+  s.t = t;
+  const p = createBlinkPlatform(s, 200, 250, w, { period: 4, on: 0.62, phase: 0 });
+  Object.assign(p, o);
+  s.platforms.push(p);
+  return s;
+};
+// Takt Ring: Bogen von oben im Uhrzeigersinn, Länge = Restzeit der Phase
+const clockArc = (ctx) => named(ctx, 'arc').filter((c) => c[4] === -Math.PI / 2);
+const arcLen = (ctx) => { const a = clockArc(ctx); return a.length ? a[0][5] + Math.PI / 2 : 0; };
+
+test('Blinkwolke: solid als Wolke mit Takt Ring, nicht solid nur als schwacher Umriss mit gestricheltem Gerüst', () => {
+  const solid = draw(blink({ solid: true, alpha: 1 }, 1), { reduceMotion: true });
+  const off = draw(blink({ solid: false, alpha: 0.15 }, 3), { reduceMotion: true });
+  const plain = blank();
+  floater(plain, 200, 250, 110);
+  const cp = draw(plain, { reduceMotion: true });
+
+  assert.notEqual(sig(solid), sig(cp));
+  assert.ok(assigned(solid, 'strokeStyle').includes('#23857c'), 'Mint Rand');
+  assert.ok(clockArc(solid).length === 1, 'Takt Ring');
+  assert.equal(maxOf(assigned(solid, 'globalAlpha')), 1);
+  assert.ok(named(solid, 'roundRect').length > 0, 'fester Körper');
+
+  // Aus: nichts Festes, Alpha höchstens ein Hauch, aber das Gerüst bleibt (gestrichelter Rand, Eckmarken)
+  assert.equal(named(off, 'roundRect').filter((c) => c[3] > 100).length, 1, 'nur der Umriss als Pille');
+  assert.ok(maxOf(assigned(off, 'globalAlpha')) <= 0.6, `Alpha aus ${maxOf(assigned(off, 'globalAlpha'))}`);
+  assert.ok(named(off, 'setLineDash').some((c) => c[1].length > 0), 'gestrichelt');
+  assert.ok(!assigned(off, 'fillStyle').some((v) => typeof v === 'string' && v.startsWith('#') && v === '#f4fffa'));
+  // Der feste Zustand hat viele Alpha 1 Flächen, der aus Zustand nicht: weder Körper noch Bäuche
+  assert.ok(named(solid, 'fill').length > named(off, 'fill').length, 'weniger gefüllte Flächen');
+  // Das Gerüst (Eckmarken) steht auch beim festen Zustand, damit die Form gleich bleibt
+  const corners = (ctx) => named(ctx, 'lineTo').filter((c) => c[1] < 200 - 2 || c[1] > 310 + 2).length;
+  assert.ok(corners(off) >= 4 && corners(solid) >= 4, 'Eckmarken');
+  // Die Platte liegt an der richtigen Stelle
+  assert.ok(named(solid, 'translate').some((c) => c[1] === 200 && c[2] === 250));
+});
+
+test('Blinkwolke: warn flackert über alpha und wird gelb, ohne Farbe am gestrichelten Ring erkennbar', () => {
+  const warnAt = (alpha, o) => draw(blink({ solid: true, warn: true, alpha }, 2.2), o);
+  const calm = draw(blink({ solid: true, warn: false, alpha: 1 }, 2.2), { reduceMotion: true });
+  const w1 = warnAt(0.9, {});
+  const w2 = warnAt(0.45, {});
+  assert.ok(assigned(w1, 'strokeStyle').includes('#ffc83d'), 'Warnfarbe am Rand');
+  assert.ok(!assigned(calm, 'strokeStyle').includes('#ffc83d'));
+  // Das Flackern kommt als alpha aus der Simulation: zwei Werte, zwei Bilder
+  assert.notEqual(sig(w1), sig(w2));
+  assert.ok(assigned(w1, 'globalAlpha').includes(0.9) && assigned(w2, 'globalAlpha').includes(0.45));
+  // Ohne Farbe lesbar: der Takt Ring ist gestrichelt, nur in der Vorwarnung
+  const dashedArc = (ctx) => named(ctx, 'setLineDash').some((c) => c[1].length > 0);
+  assert.ok(dashedArc(w1) && !dashedArc(calm));
+  // reduceMotion: kein Flackern, ruhig mit festem Alpha, die Warnung bleibt sichtbar (Farbe und Strichelung)
+  const q1 = warnAt(0.9, { reduceMotion: true });
+  const q2 = warnAt(0.45, { reduceMotion: true });
+  assert.equal(sig(q1), sig(q2), 'bei reduceMotion kein Flackern');
+  assert.ok(assigned(q1, 'strokeStyle').includes('#ffc83d') && dashedArc(q1));
+  // Der Ring pulsiert in der Warnung (Größe aus dem Takt), ruhig nicht
+  const ringR = (s, o) => clockArc(draw(s, o))[0][3];
+  const radii = new Set([1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4].map((t) => ringR(blink({ solid: true, warn: true, alpha: 1 }, t), {}).toFixed(3)));
+  assert.ok(radii.size > 3, 'Ring pulsiert');
+  assert.equal(new Set([1.9, 2.1, 2.3].map((t) => ringR(blink({ solid: true, warn: true, alpha: 1 }, t), { reduceMotion: true }))).size, 1);
+});
+
+test('Blinkwolke: der Ring zeigt die Restzeit aus s.t, auch in der Pause bis zur Rückkehr', () => {
+  // Takt 4 s, fest bis ph 0,62 (2,48 s), danach weg bis 4 s
+  const left = (t, solid) => arcLen(draw(blink({ solid, alpha: solid ? 1 : 0.15 }, t), { reduceMotion: true }));
+  const a = left(0.2, true);
+  const b = left(1.2, true);
+  const c = left(2.3, true);
+  assert.ok(a > b && b > c && c > 0, `fest: Ring schrumpft ${a} ${b} ${c}`);
+  assert.ok(Math.abs(a / (Math.PI * 2) - (0.62 - 0.05) / 0.62) < 1e-9, 'Anteil der festen Zeit');
+  const d = left(2.6, false);
+  const e = left(3.4, false);
+  const f = left(3.9, false);
+  assert.ok(d > e && e > f && f > 0, `weg: Ring schrumpft bis zur Rückkehr ${d} ${e} ${f}`);
+  // Phase verschiebt den Takt
+  const shifted = blink({ solid: true, alpha: 1, phase: 0.25 }, 0.2);
+  assert.ok(Math.abs(arcLen(draw(shifted, { reduceMotion: true })) - left(1.2, true)) < 1e-9);
+  // Vor der Rückkehr wird der Umriss deutlicher (das Gerüst leuchtet stärker auf)
+  const lineAlpha = (t) => maxOf(assigned(draw(blink({ solid: false, alpha: 0.15 }, t), { reduceMotion: true }), 'globalAlpha'));
+  assert.ok(lineAlpha(3.9) >= lineAlpha(2.6), 'der Umriss wird vor dem Erscheinen deutlicher');
+  // Takt Punkte nur bei breiten Wolken
+  const dots = (w) => named(draw(blink({ solid: true }, 1, w), { reduceMotion: true }), 'arc').filter((c) => c[3] < 2).length;
+  assert.ok(dots(110) >= 2 && dots(50) === 0);
+});
+
+test('Blinkwolke: kaputte Felder, fehlende Uhr und Sonderfälle werfen nicht', () => {
+  for (const o of [{ period: 0 }, { period: NaN }, { period: -2 }, { on: NaN }, { on: 0 }, { on: 1 }, { on: 7 }, { phase: NaN }, { phase: -3.3 }, { alpha: NaN }, { alpha: undefined }, { alpha: 5 }, { solid: undefined }, { warn: true, solid: false }]) {
+    for (const t of [0, 1.7, 3.99, NaN, -5, 1e9]) {
+      const s = blink(o, t);
+      assert.equal(allArgsFinite(draw(s)), true, JSON.stringify(o));
+    }
+  }
+  const noClock = blink({}, 0);
+  delete noClock.t;
+  assert.doesNotThrow(() => draw(noClock));
+  // warn ohne solid gilt nicht als Warnung (Umriss bleibt ein Hauch)
+  const odd = draw(blink({ warn: true, solid: false, alpha: 0.15 }, 3), { reduceMotion: true });
+  assert.ok(!assigned(odd, 'strokeStyle').includes('#ffc83d'));
+  assert.ok(maxOf(assigned(odd, 'globalAlpha')) <= 0.6);
+  // Konstanten sind wirksam: Vorwarnung nutzt BLINK.WARN, die Standardperiode kommt aus BLINK.PERIOD
+  assert.ok(BLINK.WARN > 0 && BLINK.PERIOD[0] > 0);
+});
+
 // ---------- Zonen ----------
 
 function windStreaks(ctx) {
