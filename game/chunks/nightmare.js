@@ -468,10 +468,10 @@ export const NIGHTMARE = [
     },
   },
 
-  // Sturzflug Schacht: oben führt eine Treppe aus drei Wolken über den Schacht, unten liegt ein Boden voller Wächter
-  // (zwei Gewitterwolken und ein Hüpfer) mit einem Sternenband. Die Hauptroute bleibt oben und braucht nur Sprung und
-  // Doppelsprung. Wer in den Schacht springt und im Fallen stampft, fegt alle Wächter mit einer Schockwelle weg und läuft
-  // unten weiter. Aus dem Schacht führt eine Wolke zurück zum Ausstieg.
+  // Sturzflug Schacht: oben führt eine Treppe aus drei Wolken über den Schacht. Unten liegt ein langer Boden, auf dem unter der
+  // höchsten Wolke zwei Gewitterwolken und ein Hüpfer dicht beieinander wachen. Die Hauptroute bleibt oben und braucht nur
+  // Sprung und Doppelsprung. Wer auf der höchsten Wolke hochspringt und im Fallen stampft, landet mitten unter den Wächtern,
+  // und die Schockwelle räumt alle in Reichweite ab. Der Boden endet kurz vor dem Ausstieg: wer hinunterfällt, klettert wieder hoch.
   {
     id: 'slam-shaft',
     name: 'Sturzflug Schacht',
@@ -502,19 +502,21 @@ export const NIGHTMARE = [
         x += gap + w;
         y = ys[i];
       }
-      // Schachtboden unter der Treppe, 66 px tiefer als der Einstieg
-      const lx = tops[0].x - b.ox - 30;
-      const lw = tops[2].x - b.ox + tops[2].w + 30 - lx;
-      const low = b.ground(lx, 66, lw);
-      guard(b, 'walker', low, 56, 56 + 100);
-      guard(b, 'jumper', low, lw * 0.5 - 62, lw * 0.5 + 62);
-      guard(b, 'walker', low, lw - 56 - 100, lw - 56);
-      b.starLine(lx + 40, 66 - 42, lx + lw - 40, 66 - 42, 6);
       const gap = gapFor(b, y, 0, b.rand(0.8, 0.9));
       const exit = b.ground(x + gap, 0, b.int(250, 270));
       gapArc(b, x, y, x + gap, 0, 3);
       b.starsOver(exit, 3, 42, 30);
       route.push(exit);
+      // Schachtboden 66 px unter der Starthöhe, vom Einstieg bis 40 px vor den Ausstieg (zum Klettern genügt ein Sprung)
+      const lx = a.w + 30;
+      const lw = exit.x - b.ox - 40 - lx;
+      const low = b.ground(lx, 66, lw);
+      // Wächter dicht beieinander unter der höchsten Wolke: zwei Gewitterwolken, dann der Hüpfer (Abstände wie validate.js sie fordert)
+      const mid = tops[1].x - b.ox + tops[1].w / 2 - lx;
+      guard(b, 'walker', low, mid - 112, mid - 52, { dir: -1 });
+      guard(b, 'walker', low, mid - 92, mid - 32, { dir: 1 });
+      guard(b, 'jumper', low, mid + 8, mid + 98);
+      b.starLine(lx + 40, 66 - 42, lx + lw - 40, 66 - 42, 6);
       b.route(...route);
     },
   },
@@ -564,9 +566,9 @@ export const NIGHTMARE = [
     },
   },
 
-  // Eishagel: vier Eiswolken hintereinander, auf denen der Spieler weit rutscht, und über den Lücken fächern zwei Hagelwolken
-  // nach unten. Auf dem Eis bremst man nicht, also lohnt sich jeder Absprung früh, und die Salve lässt sich nur mit Timing
-  // unterlaufen. Die kleine feste Insel in der Mitte ist der einzige Platz zum Stehen.
+  // Eishagel: drei Eiswolken, auf denen der Spieler weit rutscht, und über den Lücken fächern zwei Hagelwolken nach unten.
+  // Auf dem Eis bremst man nicht, also lohnt sich jeder Absprung früh, und die Salve lässt sich nur mit Timing unterlaufen.
+  // Die kleine feste Insel zwischen den Eiswolken ist der einzige Platz zum Stehen.
   {
     id: 'ice-hail-slide',
     name: 'Eishagel',
@@ -611,7 +613,7 @@ export const NIGHTMARE = [
       b.starsOver(exit, 3, 42, 30);
       mids.push(x + gap / 2);
       route.push(exit);
-      // Hagelwolken über der Lücke vor der ersten Eiswolke... und vor dem Ausstieg, versetzt im Takt
+      // Hagelwolken über der Lücke zwischen den ersten beiden Eiswolken und über der Lücke vor dem Ausstieg, versetzt im Takt
       hailAbove(b, mids[1], { range: 80, dir: 1, phase: 0.15 });
       hailAbove(b, mids[mids.length - 1], { range: 80, dir: -1, phase: 0.8 });
       b.route(...route);
@@ -635,48 +637,39 @@ export const NIGHTMARE = [
       const a = b.ground(0, 0, b.int(240, 260));
       b.starsOver(a, 2, 42, 30);
       const route = [a];
-      let x = a.w; // rechte Kante der letzten festen Plattform
+      let x = a.w; // rechte Kante der letzten festen Plattform, bei einer Fähre ihre linke Stellung
       let y = 0;
+      // Fähre: in der weitesten Stellung liegt die Lücke knapp über dem sicheren Limit (nur mit Warten), in der nächsten bleiben 24 px
       const ferry = (dy) => {
-        // Weiteste Stellung: Lücke knapp über dem Limit (nur mit Warten). Nächste Stellung: 24 px Luft.
         const wh = b.int(110, 122);
         const far = gapFor(b, y, y + dy, b.rand(1.0, 1.08), 0);
         const axh = Math.floor(Math.min(b.int(54, 64), (far - 24) / 2));
         const cx = x + far - axh;
-        const f = b.moving(cx, y + dy, wh, { ax: axh, period: b.rand(3.0, 3.5), phase: b.rand(0, TAU) });
+        const f = b.moving(cx, y + dy, wh, { ax: axh, period: b.rand(3.0, 3.5) - 0.4 * k, phase: b.rand(0, TAU) });
         b.starArc(cx - axh, cx + axh + wh, y + dy - 34, 50, 4);
         route.push(f);
-        x = cx - axh + wh; // bei der nächsten Lücke zählt die Stellung ganz links
+        x = cx - axh + wh;
         y += dy;
-        return { axh, wh };
       };
-      const land = (ny, w, how) => {
-        // Die Fähre schwingt zurück: vom rechten Anschlag springt man mit der Lücke minus 2 axh
-        const gap = how.far;
-        const p = b.cloud(x + gap, ny, w);
+      // Insel hinter einer Fähre: die Lücke wird von deren linker Stellung aus gerechnet, also bei der Rückkehr der Fähre kürzer
+      const island = (dy, w) => {
+        const gap = gapFor(b, y, y + dy, b.rand(1.0, 1.08), 0);
+        const p = b.cloud(x + gap, y + dy, w);
         route.push(p);
         x += gap + w;
-        y = ny;
+        y += dy;
         return p;
       };
-      void land;
       // Fähre 1, Insel mit Hüpfer
-      const f1 = ferry(b.pick([-8, 0, 8]));
-      const g1 = gapFor(b, y, y + b.pick([-6, 0, 6]), b.rand(1.0, 1.08), 0);
-      const i1 = b.cloud(x + g1, y, b.int(244, 262));
+      ferry(b.pick([-8, 0, 8]));
+      const i1 = island(b.pick([-6, 0, 6]), b.int(244, 262));
       guard(b, 'jumper', i1, 84, 84 + 126);
-      b.starArc(i1.x - b.ox + 90, i1.x - b.ox + 210, y - 30, 90, 4);
-      route.push(i1);
-      void f1;
-      x += g1 + i1.w;
+      b.starArc(i1.x - b.ox + 90, i1.x - b.ox + 210, i1.y - b.oy - 30, 90, 4);
       // Fähre 2, Insel mit Stachelwolke
       ferry(b.pick([-14, -6, 6, 14]));
-      const g2 = gapFor(b, y, y + b.pick([-6, 0, 6]), b.rand(1.0, 1.08), 0);
-      const i2 = b.cloud(x + g2, y, b.int(196, 212));
+      const i2 = island(b.pick([-6, 0, 6]), b.int(196, 212));
       spikeAt(b, i2, (i2.w - SPIKE.w) / 2);
-      b.starArc(i2.x - b.ox + 50, i2.x - b.ox + i2.w - 50, y - 30, 80, 4);
-      route.push(i2);
-      x += g2 + i2.w;
+      b.starArc(i2.x - b.ox + 50, i2.x - b.ox + i2.w - 50, i2.y - b.oy - 30, 80, 4);
       const gap = gapFor(b, y, 0, b.rand(0.8, 0.9));
       const exit = b.ground(x + gap, 0, b.int(250, 270));
       gapArc(b, x, y, x + gap, 0, 2);

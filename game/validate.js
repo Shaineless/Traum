@@ -5,7 +5,7 @@ import { ENEMY, H, LIMITS, WIND, Y_MAX, Y_MIN } from './constants.js';
 import { hopOkMoving } from './reach.js';
 
 // Sicherheitsanteil der maximalen Sprungweite: Tutorial großzügig, später knapper
-export const safeFor = (diff) => Math.min(0.9, 0.58 + (Math.max(1, diff) - 1) * 0.045);
+export const safeFor = (diff) => Math.min(0.9, 0.58 + (Math.max(1, diff) - 1) * 0.06); // wie früher bis Stufe 5, danach weiter bis 0,9
 // Ein Doppelsprung darf erst ab Schwierigkeit 2,5 für Chunk Routen nötig sein
 export const dblAllowed = (diff) => diff >= 2.5;
 

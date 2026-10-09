@@ -2,15 +2,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockCtx } from './mock-ctx.mjs';
-import { newGame } from './helpers.mjs';
-import { H, LIMITS, POWERUPS, W } from '../game/constants.js';
+import { input, newGame } from './helpers.mjs';
+import { BLINK, COMET, H, HAIL, LIMITS, POWERUPS, W } from '../game/constants.js';
 import {
-  createBreakablePlatform, createGate, createLightning, createMovingPlatform, createPowerup, createRain, createSpike,
-  createStar, createStaticPlatform, createWind,
+  createBlinkPlatform, createBreakablePlatform, createComet, createGate, createHail, createHailcloud, createLightning,
+  createMovingPlatform, createPowerup, createRain, createSpike, createSpringPlatform, createStar, createStaticPlatform, createWind,
 } from '../game/entities.js';
 import { cleanup, ensureAhead } from '../game/generator.js';
-import { lightningColumn, spikeHitbox } from '../game/obstacles.js';
+import { cometHitbox, cometPosition, hailHitbox, lightningColumn, spikeHitbox } from '../game/obstacles.js';
 import { createState } from '../game/state.js';
+import { stepSim } from '../game/sim.js';
 import { themeAt } from '../game/theme.js';
 import { drawWorld } from '../game/render/world.js';
 

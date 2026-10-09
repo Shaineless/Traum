@@ -22,7 +22,7 @@ function scripts() {
       for (const dbl of [-1, 24, 36]) {
         list.push({
           id: `j${move}:${jf}:${dbl}`,
-          f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: i >= jf && i < jf + 40, dashPressed: false }),
+          f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: (i >= jf && i < jf + 22) || (dbl >= 0 && i >= jf + dbl && i < jf + dbl + 18), dashPressed: false, downHeld: true }),
         });
       }
     }

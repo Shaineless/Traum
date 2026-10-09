@@ -17,7 +17,10 @@ import { hopOk, hopRatio, maxRise, platformAt } from '../game/reach.js';
 import { seedRng } from '../game/rng.js';
 import { createState } from '../game/state.js';
 import { safeFor } from '../game/validate.js';
-import { buildChunk } from './chunk-harness.mjs';
+import { buildChunk as buildChunkReal } from './chunk-harness.mjs';
+
+// Layout Tests prüfen die Geometrie bei Tempo 1. Das Tempo der Schwierigkeit prüft validateStaged im echten Spiel.
+const buildChunk = (c, o = {}) => buildChunkReal(c, { pace: 1, ...o });
 
 const ALL = [...BASIC, FLAT, GATE];
 const byId = Object.fromEntries(ALL.map((c) => [c.id, c]));
@@ -593,7 +596,7 @@ const SCRIPTS = [{ f: () => ({ ...IDLE, move: 1 }) }, { f: () => IDLE }];
 for (const move of [1, 0]) {
   for (const jf of [0, 4, 9, 15, 22, 30, 40]) {
     for (const dbl of [-1, 20, 30, 40]) {
-      SCRIPTS.push({ f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: i >= jf && i < jf + 40, dashPressed: false }) });
+      SCRIPTS.push({ f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: (i >= jf && i < jf + 22) || (dbl >= 0 && i >= jf + dbl && i < jf + dbl + 18), dashPressed: false, downHeld: true }) });
     }
   }
 }

@@ -18,7 +18,10 @@ import { hopOk, hopRatio, maxRise, platformAt } from '../game/reach.js';
 import { seedRng } from '../game/rng.js';
 import { createState } from '../game/state.js';
 import { safeFor } from '../game/validate.js';
-import { buildChunk } from './chunk-harness.mjs';
+import { buildChunk as buildChunkReal } from './chunk-harness.mjs';
+
+// Layout Tests prüfen die Geometrie bei Tempo 1. Das Tempo der Schwierigkeit prüft validateStaged im echten Spiel.
+const buildChunk = (c, o = {}) => buildChunkReal(c, { pace: 1, ...o });
 
 const byId = Object.fromEntries(ADVANCED.map((c) => [c.id, c]));
 const SEEDS = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -517,7 +520,7 @@ test('updraft-climb mit der echten Physik: ein Sprung schafft die Wolke nur mit 
             Object.assign(s2.player, { x: a.x + a.w - off, y: a.y - 34, onGround: true, groundId: a.id });
             s2.camX = s2.player.x - 300;
             for (let i = 0; i < 160; i++) {
-              const input = { move: i < stop ? 1 : 0, jumpPressed: i === jf, jumpHeld: i >= jf && i < jf + 40, dashPressed: false };
+              const input = { move: i < stop ? 1 : 0, jumpPressed: i === jf, jumpHeld: i >= jf && i < jf + 22, dashPressed: false, downHeld: true };
               s2.t += STEP;
               updatePlatforms(s2, STEP);
               updatePlayer(s2, input, STEP);
@@ -847,7 +850,7 @@ test('power-shrine mit der echten Physik: ein Doppelsprung holt das Powerup, ein
             s2.camX = s2.player.x - 300;
             const presses = dbl >= 0 ? [jf, jf + dbl] : [jf];
             for (let i = 0; i < 160; i++) {
-              const input = { move: i < stop ? 1 : 0, jumpPressed: presses.includes(i), jumpHeld: presses.some((q) => i >= q && i < q + 40), dashPressed: false };
+              const input = { move: i < stop ? 1 : 0, jumpPressed: presses.includes(i), jumpHeld: presses.some((q) => i >= q && i < q + 22), dashPressed: false, downHeld: true };
               s2.t += STEP;
               updatePlatforms(s2, STEP);
               updatePlayer(s2, input, STEP);
@@ -979,7 +982,7 @@ const SCRIPTS = [{ f: () => ({ ...IDLE, move: 1 }) }, { f: () => IDLE }];
 for (const move of [1, 0]) {
   for (const jf of [0, 4, 9, 15, 22, 30, 40]) {
     for (const dbl of [-1, 20, 30, 40]) {
-      SCRIPTS.push({ f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: i >= jf && i < jf + 40, dashPressed: false }) });
+      SCRIPTS.push({ f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: (i >= jf && i < jf + 22) || (dbl >= 0 && i >= jf + dbl && i < jf + dbl + 18), dashPressed: false, downHeld: true }) });
     }
   }
 }

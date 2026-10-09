@@ -907,7 +907,7 @@ const SCRIPTS = [{ f: () => ({ ...IDLE, move: 1 }) }, { f: () => IDLE }];
 for (const move of [1, 0]) {
   for (const jf of [0, 4, 9, 15, 22, 30, 40]) {
     for (const dbl of [-1, 20, 30, 40]) {
-      SCRIPTS.push({ f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: i >= jf && i < jf + 40, dashPressed: false }) });
+      SCRIPTS.push({ f: (i) => ({ move, jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1), jumpHeld: (i >= jf && i < jf + 22) || (dbl >= 0 && i >= jf + dbl && i < jf + dbl + 18), dashPressed: false, downHeld: true }) });
     }
   }
 }

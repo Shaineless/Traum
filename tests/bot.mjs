@@ -22,8 +22,9 @@ function makeScripts() {
           f: (i) => ({
             move,
             jumpPressed: i === jf || i === (dbl >= 0 ? jf + dbl : -1),
-            jumpHeld: i >= jf && i < jf + 40,
+            jumpHeld: (i >= jf && i < jf + 22) || (dbl >= 0 && i >= jf + dbl && i < jf + dbl + 18),
             dashPressed: false,
+            downHeld: true, // beendet das Gleiten: der Bot spielt ohne Fähigkeiten
           }),
         });
       }

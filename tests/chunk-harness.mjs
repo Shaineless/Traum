@@ -9,12 +9,12 @@ const ALL_MECH = ['moving', 'breakable', 'walker', 'spike', 'jumper', 'flyer', '
 
 // Baut den Chunk einmal und gibt { st, errors, oy } zurück.
 // meter: Position im Spiel (bestimmt freigeschaltete Mechaniken), diff: Schwierigkeit für die Fairness Regeln.
-export function buildChunk(chunk, { seed = 1, meter = chunk.min, diff = chunk.diff, mechs, starBoost = false, eventWind = 0 } = {}) {
+export function buildChunk(chunk, { seed = 1, meter = chunk.min, diff = chunk.diff, mechs, starBoost = false, eventWind = 0, pace = null } = {}) {
   const s = createState({ seed });
   seedRng(s, seed);
   s.events.starBoost = starBoost;
   const unlocked = mechs || mechsAt(meter);
-  const probe = createBuilder(s, { ox: 0, oy: 0, diff, meter, mechs: unlocked, measure: true });
+  const probe = createBuilder(s, { ox: 0, oy: 0, diff, meter, mechs: unlocked, measure: true, pace });
   const saved = s.rng;
   chunk.build(probe);
   s.rng = saved;
@@ -24,7 +24,7 @@ export function buildChunk(chunk, { seed = 1, meter = chunk.min, diff = chunk.di
   const hi = Math.min(Y_MAX - platMaxY, H - 12 - maxY);
   if (lo > hi) return { st: probe.st, errors: [`Chunk passt nicht in den Höhenbereich (Plattformen ${Math.round(platMinY)} bis ${Math.round(platMaxY)}, alles ${Math.round(minY)} bis ${Math.round(maxY)})`], oy: 0 };
   const oy = Math.min(hi, Math.max(lo, 330));
-  const b = createBuilder(s, { ox: 1000, oy, diff, meter, mechs: unlocked, gateIndex: 1 });
+  const b = createBuilder(s, { ox: 1000, oy, diff, meter, mechs: unlocked, gateIndex: 1, pace });
   chunk.build(b);
   const errors = validateStaged(b.st, { ox: 1000, diff, mechs: unlocked, eventWind });
   return { st: b.st, errors, oy, s };

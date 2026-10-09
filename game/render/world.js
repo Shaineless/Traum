@@ -26,8 +26,8 @@ const MARGIN = 150; // Objekte im Bereich minus MARGIN bis W plus MARGIN werden 
 // kleine Details, übersteigt sie LOD[1], bleiben nur noch die Grundformen. Im normalen Spiel
 // liegt die Summe weit darunter, die Stufen fangen nur ungewöhnlich volle Bilder ab.
 const COST = {
-  plat: 50, spring: 70, ice: 75, iceGround: 90, blink: 55,
-  star: 14, spike: 55, bolt: 75, comet: 95, hail: 12, zone: 100, power: 32, gate: 105,
+  plat: 50, spring: 60, ice: 135, iceGround: 145, blink: 50,
+  star: 14, spike: 55, bolt: 75, comet: 95, hail: 24, zone: 100, power: 36, gate: 105,
 };
 const LOD = [1700, 3000];
 const STAR_RADIUS = { normal: 10, risk: 14, event: 7 };
@@ -1989,6 +1989,13 @@ function cometWarn(f, h, x, y) {
   ctx.fillStyle = G(f, 'cmGlow', mkCmGlow);
   ctx.fillRect(-1, -1, 2, 2);
   ctx.restore();
+  // Kuppel: wird mit der Aufladung dichter und zeigt so die Fläche, in der es einschlägt
+  ctx.fillStyle = '#ffa860';
+  ctx.globalAlpha = (0.07 + 0.2 * c) * lit;
+  ctx.beginPath();
+  ctx.arc(0, 0, rr, Math.PI, TAU);
+  ctx.closePath();
+  ctx.fill();
 
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -2243,6 +2250,7 @@ function cometEmbers(f, h, x, y) {
   ctx.save();
   ctx.scale(R * 0.8, R * 0.5);
   ctx.globalAlpha = hot * 0.6;
+  ctx.fillStyle = G(f, 'cmEmber', mkCmEmber);
   ctx.fillRect(-1, -1, 2, 1);
   ctx.restore();
 
@@ -2880,8 +2888,12 @@ function drawDebug(f) {
     if (!visX(f, p.x, p.x + p.w)) continue;
     if (p.kind === 'breakable' && p.state === 'broken') continue;
     const x = p.x - f.cam;
+    // Blinkwolke ohne festen Boden: gestrichelt, dort kann man gerade nicht landen
+    const gone = p.kind === 'blink' && !p.solid;
+    if (gone) dash(ctx, [3, 3]);
     ctx.strokeRect(x + 0.5, p.y + 0.5, p.w - 1, Math.min(num(p.h, 16), f.H - p.y) - 1);
-    ctx.fillText(`#${p.id}`, x + 3, p.y - 3);
+    if (gone) dash(ctx, []);
+    ctx.fillText(p.kind === 'static' ? `#${p.id}` : `#${p.id} ${p.kind}`, x + 3, p.y - 3);
   }
 
   ctx.strokeStyle = '#ff6b6b';
@@ -2897,8 +2909,27 @@ function drawDebug(f) {
       const w = num(h.w, LIGHTNING.WIDTH);
       ctx.strokeRect(h.x - f.cam - w / 2 + 0.5, cy + 0.5, w - 1, f.H - cy - 1);
       ctx.fillText(`#${h.id} ${h.phase}`, h.x - f.cam - w / 2 + 3, cy + 22);
+    } else if (h.kind === 'comet') {
+      // Schadenskreis um den Einschlagpunkt, nur in der Phase strike scharf (sonst gestrichelt)
+      if (!cometOk(h) || !visX(f, h.x - COMET.RADIUS, h.x + COMET.RADIUS)) continue;
+      const c = cometHitbox(h);
+      const live = h.phase === 'strike';
+      if (!live) dash(ctx, [3, 3]);
+      ctx.beginPath();
+      ctx.arc(c.x - f.cam, c.y, c.r, 0, TAU);
+      ctx.stroke();
+      if (!live) dash(ctx, []);
+      ctx.fillText(`#${h.id} ${h.phase}`, c.x - f.cam - c.r + 3, c.y - c.r * 0.5);
     }
   }
+  // Hagelkörner: Trefferkreise in einem Pfad
+  ctx.beginPath();
+  for (const h of f.s.hazards || []) {
+    if (!h || h.kind !== 'hail' || !Number.isFinite(h.x) || !Number.isFinite(h.y) || !visX(f, h.x - 20, h.x + 20)) continue;
+    const c = hailHitbox(h);
+    disc(ctx, c.x - f.cam, c.y, c.r);
+  }
+  ctx.stroke();
 
   ctx.strokeStyle = '#7dc8ff';
   ctx.fillStyle = '#7dc8ff';

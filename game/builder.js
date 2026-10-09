@@ -12,12 +12,12 @@ import {
 import { chance, int, pick, range } from './rng.js';
 
 // measure = true: Probelauf zum Ausmessen. Keine IDs aus dem echten Zustand, nur Ausdehnung zählt.
-export function createBuilder(s, { ox, oy, diff, meter, mechs, measure = false, gateIndex = 0 }) {
+export function createBuilder(s, { ox, oy, diff, meter, mechs, measure = false, gateIndex = 0, pace: paceOverride = null }) {
   const ctx = measure ? { nextId: 1_000_000_000 } : s;
   const X = (x) => ox + x;
   const Y = (y) => oy + y;
   const boost = s.events.starBoost ? 1.5 : 1;
-  const pace = paceAt(diff); // Tempo Faktor dieser Schwierigkeit für Gegner, Plattformen und Blitzabstände
+  const pace = paceOverride ?? paceAt(diff); // Tempo Faktor dieser Schwierigkeit (paceOverride nur für Tests)
   const st = {
     platforms: [], enemies: [], hazards: [], zones: [], stars: [], powerups: [], gates: [], route: [],
     minY: Infinity, maxY: -Infinity, platMinY: Infinity, platMaxY: -Infinity, maxX: 0, tags: new Set(),
